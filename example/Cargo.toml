@@ -1,0 +1,14 @@
+[package]
+name = "sandman_example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+env_logger = "0.11.8"
+sandman = { path = "../" }
+tokio = { version = "1.47.1", features = ["full"] }
+
+[[bin]]
+name = "sandman_example"
+path = "src/main.rs"
