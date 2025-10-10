@@ -4,11 +4,9 @@ use std::io::{SeekFrom, Cursor, BufReader, BufRead, Seek, Read};
 
 use nom::{Parser, Finish, multi::many0};
 
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncReadExt;
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncSeekExt, BufReader as TokioBufReader};
-use log::{debug};
+use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
+use log::debug;
 
 use pufferfish::BGZ;
 
@@ -207,15 +205,9 @@ where
 
 		match &mut self.reader
 		{
-			FileKind::Plain(reader) =>
+			FileKind::Plain(_) =>
 			{
-				for offset in region
-				{
-					reader.seek(SeekFrom::Start(offset.start)).await?;
-					let mut tmp = vec![0u8; (offset.end - offset.start) as usize];
-					reader.read_exact(&mut tmp).await?;
-					buffer.extend_from_slice(&tmp);
-				}
+				return Err(error::Error::PlainBedRegion);
 			}
 			FileKind::BGZF(reader) =>
 			{
