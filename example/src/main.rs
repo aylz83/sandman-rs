@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()>
 
 	println!("Input file: {}", &bed_file);
 
-	let mut reader = sandman::bed::Reader::from_path(bed_file).await?;
+	let mut reader = sandman::bed::Reader::from_path(bed_file, None).await?;
 
 	while let Some(line) = reader.read_line().await?
 	{
