@@ -17,6 +17,8 @@ pub enum Error
 	NoIndex,
 	#[error("Unable to read BGZ block")]
 	BGZBlock,
+	#[error("Associated Tabix file not open")]
+	TabixNotOpen,
 	#[error(transparent)]
 	Pufferfish(#[from] PufferfishError),
 	#[error("IO error: {0}")]

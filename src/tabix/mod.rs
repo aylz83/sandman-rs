@@ -17,6 +17,7 @@ use pufferfish::BGZ;
 use crate::AsyncReadSeek;
 use crate::error;
 
+#[derive(Debug)]
 pub struct Header
 {
 	pub n_ref: i32,
@@ -27,16 +28,19 @@ pub struct Header
 	pub skip: i32,
 }
 
+#[derive(Debug)]
 pub struct Region
 {
 	pub chunks: Vec<Range<u64>>,
 }
 
+#[derive(Debug)]
 pub struct Reference
 {
 	pub bins: HashMap<u32, Region>,
 }
 
+#[derive(Debug)]
 pub struct Reader
 {
 	pub header: Header,
@@ -72,11 +76,18 @@ impl Reader
 		})
 	}
 
-	pub fn offsets_for_seqname(&self, seqname: &str) -> error::Result<Vec<Range<u64>>>
+	pub fn offsets_for_tid(&self, tid: &str) -> error::Result<Option<Vec<Range<u64>>>>
 	{
-		let idx = self.seqnames.iter().position(|s| s == seqname).unwrap();
+		let Some(idx) = self.seqnames.iter().position(|s| s == tid)
+		else
+		{
+			debug!("tid '{}' not found in tabix index", tid);
+			return Ok(None); // chromosome missing
+		};
 
 		let index = &self.ref_indices[idx];
+
+		debug!("idx = {} (index = {:?})", idx, index);
 
 		let mut chunks = Vec::new();
 		for bin_entry in index.bins.values()
@@ -84,7 +95,99 @@ impl Reader
 			chunks.extend_from_slice(&bin_entry.chunks);
 		}
 
-		Ok(chunks)
+		debug!("chunks found = {:?}", chunks);
+		Ok(Some(chunks))
+	}
+
+	pub fn offsets_for_tid_region(
+		&self,
+		tid: &str,
+		start: u32,
+		end: u32,
+	) -> error::Result<Option<Vec<Range<u64>>>>
+	{
+		let Some(idx) = self.seqnames.iter().position(|s| s == tid)
+		else
+		{
+			debug!("tid '{}' not found in tabix index", tid);
+			return Ok(None); // chromosome missing
+		};
+
+		let index = &self.ref_indices[idx];
+
+		debug!("idx = {} (index = {:?})", idx, index);
+
+		let mut chunks = Vec::new();
+
+		debug!(
+			"region_bins({start}, {end}) = {:?}",
+			Self::region_bins(start, end)
+		);
+		for bin in Self::region_bins(start, end)
+		{
+			if let Some(region) = index.bins.get(&bin)
+			{
+				chunks.extend_from_slice(&region.chunks);
+			}
+		}
+
+		debug!("chunks found = {:?}", chunks);
+
+		Ok(Some(chunks))
+	}
+
+	fn region_bins(start: u32, end: u32) -> Vec<u32>
+	{
+		const MAX_POS: u32 = 1 << 29; // maximum coordinate (512 Mb)
+		const BIN_OFFSETS: [u32; 6] = [0, 1, 9, 73, 585, 4681];
+
+		let mut bins = Vec::new();
+
+		if start >= MAX_POS
+		{
+			return bins;
+		}
+
+		// Tabix defines bins as 0-based, half-open intervals [start, end)
+		let mut end = if end > 0 { end - 1 } else { 0 };
+		if end >= MAX_POS
+		{
+			end = MAX_POS - 1;
+		}
+
+		bins.push(0); // root bin
+
+		// Level 1 (512 Mb / 8)
+		for k in (BIN_OFFSETS[1] + (start >> 26))..=(BIN_OFFSETS[1] + (end >> 26))
+		{
+			bins.push(k);
+		}
+
+		// Level 2 (64 Mb)
+		for k in (BIN_OFFSETS[2] + (start >> 23))..=(BIN_OFFSETS[2] + (end >> 23))
+		{
+			bins.push(k);
+		}
+
+		// Level 3 (8 Mb)
+		for k in (BIN_OFFSETS[3] + (start >> 20))..=(BIN_OFFSETS[3] + (end >> 20))
+		{
+			bins.push(k);
+		}
+
+		// Level 4 (1 Mb)
+		for k in (BIN_OFFSETS[4] + (start >> 17))..=(BIN_OFFSETS[4] + (end >> 17))
+		{
+			bins.push(k);
+		}
+
+		// Level 5 (128 kb)
+		for k in (BIN_OFFSETS[5] + (start >> 14))..=(BIN_OFFSETS[5] + (end >> 14))
+		{
+			bins.push(k);
+		}
+
+		bins
 	}
 
 	async fn read_tabix<R>(
@@ -210,6 +313,11 @@ impl Reader
 
 				// debug!("ioff = {:?}", ioff);
 			}
+		}
+
+		for (bin, region) in &ref_indices[0].bins
+		{
+			debug!("chr1 bin {} → {:?}", bin, region.chunks);
 		}
 
 		Ok((

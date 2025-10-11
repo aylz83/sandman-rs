@@ -13,19 +13,19 @@ async fn main() -> anyhow::Result<()>
 
 	let mut reader = sandman::bed::Reader::from_path(bed_file, None).await?;
 
-	let lines = reader.read_lines_in_tid("chr3").await?;
-	if let Some(ref lines) = lines
-	{
-		for line in lines
-		{
-			println!("Bed line: {:?}", line);
-		}
-	}
-
-	// while let Some(line) = reader.read_line().await?
+	// let lines = reader.read_lines_in_tid("chr3").await?;
+	// if let Some(ref lines) = lines
 	// {
-	// 	println!("Bed line: {:?}", line);
+	// 	for line in lines
+	// 	{
+	// 		println!("Bed line: {:?}", line);
+	// 	}
 	// }
+
+	while let Some(line) = reader.read_line().await?
+	{
+		println!("Bed line: {:?}", line);
+	}
 
 	Ok(())
 }
