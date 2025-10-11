@@ -1,0 +1,13 @@
+browser position chr1:1000-5000
+browser hide all
+track name="Genes" description="Protein-coding genes" visibility=2 itemRgb="On"
+chr1  1050  1500  GeneA
+chr1  2000  2500  GeneB
+track name="NonCoding" description="Non-coding RNA genes" visibility=1
+chr1  3000  3200  lncRNA1
+chr1  4000  4500  lncRNA2
+browser position chr2:1000-2000
+track name="miRNAs" description="Micro RNAs" visibility=2
+chr2  1050  1100  miRNA1
+chr2  1150  1200  miRNA2
+

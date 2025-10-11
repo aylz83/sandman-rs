@@ -16,6 +16,15 @@ use crate::AsyncReadSeek;
 use crate::tabix;
 use crate::bed::*;
 
+use crate::bed::parser::parse_browser_line;
+use crate::bed::parser::parse_track_line;
+use crate::bed::parser::parse_bed3_record;
+use crate::bed::parser::parse_bed4_record;
+use crate::bed::parser::parse_bed5_record;
+use crate::bed::parser::parse_bed6_record;
+use crate::bed::parser::parse_bed12_record;
+use crate::bed::parser::parse_bedmethyl_record;
+
 enum FileKind<R>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
@@ -133,6 +142,9 @@ where
 
 	tbi_reader: Option<tabix::Reader>,
 	bgz_buffer: String,
+	track_line: Option<Track>,
+	last_browser: Option<BrowserMeta>,
+	reset_browser: bool,
 }
 
 impl Reader<TokioFile>
@@ -224,6 +236,9 @@ where
 			format,
 			tbi_reader,
 			bgz_buffer: String::new(),
+			track_line: None,
+			last_browser: None,
+			reset_browser: true,
 		})
 	}
 
@@ -327,7 +342,93 @@ where
 		}
 	}
 
-	pub async fn read_line(&mut self) -> error::Result<Option<Box<dyn BedLine>>>
+	pub async fn read_line(&mut self) -> error::Result<Option<(&Option<Track>, Record)>>
+	{
+		while let Some(line) = self.read_line_io().await?
+		{
+			let line_bytes = line.as_bytes();
+
+			if line.starts_with("track")
+			{
+				let (_, track) = parse_track_line(&line)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				self.track_line = Some(track);
+				continue;
+			}
+
+			if line.starts_with("browser")
+			{
+				// Skip browser lines for this simple reader
+				continue;
+			}
+
+			let record = self.parse_record(line_bytes)?;
+			return Ok(Some((&self.track_line, record)));
+		}
+
+		Ok(None)
+	}
+
+	pub async fn read_line_with_meta(
+		&mut self,
+		browser_meta: &mut Option<BrowserMeta>,
+	) -> error::Result<Option<(&Option<Track>, Record)>>
+	{
+		while let Some(line) = self.read_line_io().await?
+		{
+			let line_bytes = line.as_bytes();
+
+			if line.starts_with("track")
+			{
+				let (_, track) = parse_track_line(&line)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				self.track_line = Some(track);
+				continue;
+			}
+
+			if line.starts_with("browser")
+			{
+				let (_, parsed) = parse_browser_line(&line)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+
+				if self.reset_browser
+				{
+					// Previous BED rows are done. Start a new browser block.
+					self.last_browser = Some(parsed);
+				}
+				else
+				{
+					// Consecutive browser lines → merge
+					if let Some(existing) = self.last_browser.as_mut()
+					{
+						existing.attrs.extend(parsed.attrs);
+					}
+					else
+					{
+						self.last_browser = Some(parsed);
+					}
+				}
+
+				self.reset_browser = false;
+
+				continue;
+			}
+
+			self.reset_browser = true;
+
+			let record = self.parse_record(line_bytes)?;
+			*browser_meta = self.last_browser.clone();
+
+			return Ok(Some((&self.track_line, record)));
+		}
+
+		Ok(None)
+	}
+
+	async fn read_line_io(&mut self) -> error::Result<Option<String>>
 	{
 		loop
 		{
@@ -343,7 +444,7 @@ where
 						return Ok(None);
 					}
 				}
-				FileKind::BGZF(_reader) =>
+				FileKind::BGZF(_) =>
 				{
 					if let Some(next_line) = self.read_bgzf_line().await?
 					{
@@ -358,77 +459,59 @@ where
 
 			if line.trim().is_empty()
 			{
-				continue; // skip blank lines
+				continue;
 			}
 
-			let line_bytes = line.as_bytes();
+			return Ok(Some(line));
+		}
+	}
 
-			// Parse one record depending on detected format
-			let bed: Box<dyn BedLine> = match self.format
+	fn parse_record(&self, line_bytes: &[u8]) -> error::Result<Record>
+	{
+		match self.format
+		{
+			BedFormat::BED3 { .. } =>
 			{
-				BedFormat::BED3 {
-					has_tracks: _,
-					has_browsers: _,
-				} =>
-				{
-					let (_, record) = parse_bed3_record(line_bytes)
-						.finish()
-						.map_err(|_| error::Error::BedFormat)?;
-					Box::new(record)
-				}
-				BedFormat::BED4 {
-					has_tracks: _,
-					has_browsers: _,
-				} =>
-				{
-					let (_, record) = parse_bed4_record(line_bytes)
-						.finish()
-						.map_err(|_| error::Error::BedFormat)?;
-					Box::new(record)
-				}
-				BedFormat::BED5 {
-					has_tracks: _,
-					has_browsers: _,
-				} =>
-				{
-					let (_, record) = parse_bed5_record(line_bytes)
-						.finish()
-						.map_err(|_| error::Error::BedFormat)?;
-					Box::new(record)
-				}
-				BedFormat::BED6 {
-					has_tracks: _,
-					has_browsers: _,
-				} =>
-				{
-					let (_, record) = parse_bed6_record(line_bytes)
-						.finish()
-						.map_err(|_| error::Error::BedFormat)?;
-					Box::new(record)
-				}
-				BedFormat::BED12 {
-					has_tracks: _,
-					has_browsers: _,
-				} =>
-				{
-					let (_, record) = parse_bed12_record(line_bytes)
-						.finish()
-						.map_err(|_| error::Error::BedFormat)?;
-					Box::new(record)
-				}
-				BedFormat::BEDMethyl {
-					has_tracks: _,
-					has_browsers: _,
-				} =>
-				{
-					let (_, record) = parse_bedmethyl_record(line_bytes)
-						.finish()
-						.map_err(|_| error::Error::BedFormat)?;
-					Box::new(record)
-				}
-			};
-
-			return Ok(Some(bed));
+				let (_, r) = parse_bed3_record(line_bytes)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				Ok(Box::new(r))
+			}
+			BedFormat::BED4 { .. } =>
+			{
+				let (_, r) = parse_bed4_record(line_bytes)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				Ok(Box::new(r))
+			}
+			BedFormat::BED5 { .. } =>
+			{
+				let (_, r) = parse_bed5_record(line_bytes)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				Ok(Box::new(r))
+			}
+			BedFormat::BED6 { .. } =>
+			{
+				let (_, r) = parse_bed6_record(line_bytes)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				Ok(Box::new(r))
+			}
+			BedFormat::BED12 { .. } =>
+			{
+				let (_, r) = parse_bed12_record(line_bytes)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				Ok(Box::new(r))
+			}
+			BedFormat::BEDMethyl { .. } =>
+			{
+				let (_, r) = parse_bedmethyl_record(line_bytes)
+					.finish()
+					.map_err(|_| error::Error::BedFormat)?;
+				Ok(Box::new(r))
+			}
 		}
 	}
 
@@ -502,10 +585,7 @@ where
 		Ok(buffer)
 	}
 
-	pub async fn read_lines_in_tid(
-		&mut self,
-		tid: &str,
-	) -> error::Result<Option<Vec<Box<dyn BedLine>>>>
+	pub async fn read_lines_in_tid(&mut self, tid: &str) -> error::Result<Option<Vec<Record>>>
 	{
 		if matches!(self.reader, FileKind::Plain(_))
 		{
@@ -533,7 +613,7 @@ where
 		tid: &str,
 		start: u32,
 		end: u32,
-	) -> error::Result<Option<Vec<Box<dyn BedLine>>>>
+	) -> error::Result<Option<Vec<Record>>>
 	{
 		if matches!(self.reader, FileKind::Plain(_))
 		{
@@ -569,7 +649,7 @@ where
 	pub async fn read_lines_in_range(
 		&mut self,
 		region: Vec<Range<u64>>,
-	) -> error::Result<Option<Vec<Box<dyn BedLine>>>>
+	) -> error::Result<Option<Vec<Record>>>
 	{
 		let bytes = self.read_bytes_for_region(&region).await?;
 		debug!("read bytes = {:?}", bytes);

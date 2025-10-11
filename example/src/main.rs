@@ -22,9 +22,11 @@ async fn main() -> anyhow::Result<()>
 	// 	}
 	// }
 
-	while let Some(line) = reader.read_line().await?
+	let mut browser_meta: Option<sandman::bed::BrowserMeta> = None;
+	while let Some((track, line)) = reader.read_line_with_meta(&mut browser_meta).await?
 	{
-		println!("Bed line: {:?}", line);
+		println!("Browser meta data = {:?}", browser_meta);
+		println!("Bed line: {:?} in track {:?}", line, track);
 	}
 
 	Ok(())

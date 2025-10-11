@@ -1,0 +1,7 @@
+track name="Exons" description="Example exons" color=255,0,0
+chr2    1000    5000    exon1   0   +
+chr2    7000    9000    exon2   0   +
+
+track name="Introns" description="Example introns" color=0,0,255
+chr2    5000    7000    intron1 0   +
+
