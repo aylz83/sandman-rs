@@ -1,14 +1,10 @@
-use nom::bytes::complete::{take_while1, is_not};
-use nom::character::complete::{line_ending, multispace1};
+use nom::character::complete::{space1, line_ending, multispace1};
 use nom::{Parser, IResult};
-use nom::combinator::map_res;
 use nom::number::complete::float;
 use nom::sequence::delimited;
 use nom::character::char;
-use nom::bytes::complete::take_till1;
-use nom::bytes::complete::tag;
-use nom::character::complete::space1;
-use nom::combinator::opt;
+use nom::bytes::complete::{is_not, take_while1, take_till1, tag};
+use nom::combinator::{map_res, opt};
 use nom::multi::many0;
 
 use std::collections::HashMap;

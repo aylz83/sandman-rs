@@ -342,6 +342,23 @@ where
 		}
 	}
 
+	pub async fn seek_to_start(&mut self) -> error::Result<()>
+	{
+		match &mut self.reader
+		{
+			FileKind::Plain(reader) =>
+			{
+				reader.seek(SeekFrom::Start(0)).await?;
+			}
+			FileKind::BGZF(reader) =>
+			{
+				reader.seek(SeekFrom::Start(0)).await?;
+			}
+		}
+
+		Ok(())
+	}
+
 	pub async fn read_line(&mut self) -> error::Result<Option<(&Option<Track>, Record)>>
 	{
 		while let Some(line) = self.read_line_io().await?
