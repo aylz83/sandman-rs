@@ -88,7 +88,7 @@ macro_rules! record {
     }};
 }
 
-#[derive(Eq, Hash, PartialEq, Debug, Clone)]
+#[derive(PartialOrd, Ord, Eq, Hash, PartialEq, Debug, Clone)]
 pub enum Strand
 {
 	Plus,
