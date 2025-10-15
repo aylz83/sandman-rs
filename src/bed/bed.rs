@@ -4,6 +4,90 @@ use std::collections::HashMap;
 pub use crate::bed::record::*;
 pub use crate::bed::extra::*;
 
+#[macro_export]
+macro_rules! record {
+    // BED3
+    ($chr:expr, $start:expr, $end:expr) => {{
+        Box::new(
+            $crate::bed::BedRecord::new($chr, $start, $end)
+        ) as Box<dyn $crate::bed::BedLine>
+    }};
+
+    // BED4
+    ($chr:expr, $start:expr, $end:expr, $name:expr) => {{
+        Box::new(
+            $crate::bed::BedRecord::new($chr, $start, $end)
+                .with_name($name)
+        ) as Box<dyn $crate::bed::BedLine>
+    }};
+
+    // BED5
+    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr) => {{
+        Box::new(
+            $crate::bed::BedRecord::new($chr, $start, $end)
+                .with_name($name)
+                .with_score(Some($score))
+        ) as Box<dyn $crate::bed::BedLine>
+    }};
+
+    // BED6
+    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr, $strand:expr) => {{
+        Box::new(
+            $crate::bed::BedRecord::new($chr, $start, $end)
+                .with_name($name)
+                .with_score(Some($score))
+                .with_strand($strand.into())
+        ) as Box<dyn $crate::bed::BedLine>
+    }};
+
+    // BED12
+    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr, $strand:expr,
+        $thick_start:expr, $thick_end:expr, $item_rgb:expr, $block_count:expr,
+        $block_sizes:expr, $block_starts:expr) => {{
+        Box::new(
+            $crate::bed::BedRecord::new($chr, $start, $end)
+                .with_name($name)
+                .with_score(Some($score))
+                .with_strand($strand.into())
+                .with_bed12(
+                    $thick_start,
+                    $thick_end,
+                    Some($item_rgb),
+                    $block_count,
+                    $block_sizes,
+                    $block_starts,
+                )
+        ) as Box<dyn $crate::bed::BedLine>
+    }};
+
+    // BEDMethyl
+    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr, $strand:expr,
+        $thick_start:expr, $thick_end:expr, $item_rgb:expr, $n_valid_cov:expr,
+        $frac_mod:expr, $n_mod:expr, $n_canonical:expr, $n_other_mod:expr,
+        $n_delete:expr, $n_fail:expr, $n_diff:expr, $n_nocall:expr) => {{
+        Box::new(
+            $crate::bed::BedRecord::new($chr, $start, $end)
+                .with_name($name)
+                .with_score(Some($score))
+                .with_strand($strand.into())
+                .with_bedmethyl(
+                    $thick_start,
+                    $thick_end,
+                    Some($item_rgb),
+                    $n_valid_cov,
+                    $frac_mod,
+                    $n_mod
+                    $n_canonical,
+                    $n_other_mod,
+                    $n_delete,
+                    $n_fail,
+                    $n_diff,
+                    $n_nocall,
+                )
+        ) as Box<dyn $crate::bed::BedLine>
+    }};
+}
+
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub enum Strand
 {
