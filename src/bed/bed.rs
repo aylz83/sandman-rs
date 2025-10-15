@@ -63,7 +63,7 @@ impl BrowserMeta
 	}
 }
 
-pub trait BedLine: Debug
+pub trait BedLine: Debug + BedLineClone
 {
 	fn tid(&self) -> &str;
 	fn start(&self) -> u32;
@@ -143,6 +143,29 @@ pub trait BedLine: Debug
 	fn n_nocall(&self) -> Option<u32>
 	{
 		None
+	}
+}
+
+pub trait BedLineClone
+{
+	fn clone_box(&self) -> Box<dyn BedLine>;
+}
+
+impl<T> BedLineClone for T
+where
+	T: 'static + BedLine + Clone,
+{
+	fn clone_box(&self) -> Box<dyn BedLine>
+	{
+		Box::new(self.clone())
+	}
+}
+
+impl Clone for Box<dyn BedLine>
+{
+	fn clone(&self) -> Box<dyn BedLine>
+	{
+		self.clone_box()
 	}
 }
 
