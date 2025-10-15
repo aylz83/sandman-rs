@@ -228,6 +228,25 @@ pub trait BedLine: Debug + BedLineClone
 	{
 		None
 	}
+
+	fn get_score(&self, column: &str) -> Option<f32>
+	{
+		match column
+		{
+			"score" => self.score().map(|score| score as f32),
+			"n_valid_cov" => self.n_valid_cov().map(|n_valid_cov| n_valid_cov as f32),
+			"frac_mod" => self.frac_mod(),
+			"n_mod" => self.n_mod().map(|n_mod| n_mod as f32),
+			"n_canonical" => self.n_canonical().map(|n_canonical| n_canonical as f32),
+			"n_other_mod" => self.n_other_mod().map(|n_other_mod| n_other_mod as f32),
+			"n_delete" => self.n_delete().map(|n_delete| n_delete as f32),
+			"n_fail" => self.n_fail().map(|n_fail| n_fail as f32),
+			"n_diff" => self.n_diff().map(|n_diff| n_diff as f32),
+			"n_nocall" => self.n_nocall().map(|n_nocall| n_nocall as f32),
+			// add more as needed
+			_ => None,
+		}
+	}
 }
 
 pub trait BedLineClone
