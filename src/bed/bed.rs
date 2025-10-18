@@ -88,6 +88,7 @@ macro_rules! record {
     }};
 }
 
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[derive(PartialOrd, Ord, Eq, Hash, PartialEq, Debug, Clone)]
 pub enum Strand
 {
@@ -119,6 +120,25 @@ impl Display for Strand
 			Strand::Minus => write!(f, "-"),
 			Strand::Both => write!(f, "."),
 		}
+	}
+}
+
+#[cfg(feature = "bincode")]
+mod bincode_utils
+{
+	use super::Strand;
+	use bincode::{Encode, Decode};
+
+	pub fn serialize(data: &Strand) -> Vec<u8>
+	{
+		bincode::encode_to_vec(data, bincode::config::standard()).unwrap()
+	}
+
+	pub fn deserialize(bytes: &[u8]) -> Strand
+	{
+		bincode::decode_from_slice(bytes, bincode::config::standard())
+			.unwrap()
+			.0
 	}
 }
 
