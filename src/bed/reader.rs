@@ -7,7 +7,6 @@ use nom::{Parser, Finish, multi::many0};
 
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
-use log::debug;
 
 use pufferfish::BGZ;
 
@@ -168,7 +167,6 @@ impl Reader<TokioFile>
 
 			if tokio::fs::metadata(&tbi_path).await.is_ok()
 			{
-				debug!("Found tabix file {:?}, opening.", tbi_path);
 				Some(TokioFile::open(tbi_path).await?)
 			}
 			else
@@ -211,8 +209,6 @@ where
 		{
 			Self::detect_bed_format(&mut reader, 10).await?
 		};
-
-		debug!("Detected bed(.gz) format as {:?}", format);
 
 		reader.seek(SeekFrom::Start(0)).await?;
 
@@ -550,8 +546,6 @@ where
 						(offset.start >> 16, offset.start & 0xFFFF);
 					let (block_end, uncompressed_end) = (offset.end >> 16, offset.end & 0xFFFF);
 
-					debug!("block_start = {}, block_end = {}", block_start, block_end);
-
 					if offset.start == offset.end
 					{
 						break;
@@ -669,7 +663,6 @@ where
 	) -> error::Result<Option<Vec<Record>>>
 	{
 		let bytes = self.read_bytes_for_region(&region).await?;
-		debug!("read bytes = {:?}", bytes);
 
 		let records: Vec<Box<dyn BedLine>> = match self.format
 		{
@@ -735,7 +728,6 @@ where
 				.collect(),
 		};
 
-		debug!("records.len = {}", &records.len());
 		Ok(Some(records))
 	}
 

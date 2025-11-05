@@ -8,7 +8,6 @@ use tokio::fs::File as TokioFile;
 use tokio::io::{BufReader as TokioBufReader};
 
 use indexset::BTreeSet;
-use log::debug;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -55,8 +54,6 @@ impl Reader
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
-		debug!("{:?}", path.as_ref().file_name().unwrap());
-
 		let tabix_file = TokioFile::open(path).await?;
 		Self::from_reader(tabix_file).await
 	}
@@ -81,13 +78,10 @@ impl Reader
 		let Some(idx) = self.seqnames.iter().position(|s| s == tid)
 		else
 		{
-			debug!("tid '{}' not found in tabix index", tid);
 			return Ok(None); // chromosome missing
 		};
 
 		let index = &self.ref_indices[idx];
-
-		debug!("idx = {} (index = {:?})", idx, index);
 
 		let mut chunks = Vec::new();
 		for bin_entry in index.bins.values()
@@ -95,7 +89,6 @@ impl Reader
 			chunks.extend_from_slice(&bin_entry.chunks);
 		}
 
-		debug!("chunks found = {:?}", chunks);
 		Ok(Some(chunks))
 	}
 
@@ -109,20 +102,13 @@ impl Reader
 		let Some(idx) = self.seqnames.iter().position(|s| s == tid)
 		else
 		{
-			debug!("tid '{}' not found in tabix index", tid);
 			return Ok(None); // chromosome missing
 		};
 
 		let index = &self.ref_indices[idx];
 
-		debug!("idx = {} (index = {:?})", idx, index);
-
 		let mut chunks = Vec::new();
 
-		debug!(
-			"region_bins({start}, {end}) = {:?}",
-			Self::region_bins(start, end)
-		);
 		for bin in Self::region_bins(start, end)
 		{
 			if let Some(region) = index.bins.get(&bin)
@@ -130,8 +116,6 @@ impl Reader
 				chunks.extend_from_slice(&region.chunks);
 			}
 		}
-
-		debug!("chunks found = {:?}", chunks);
 
 		Ok(Some(chunks))
 	}
@@ -205,7 +189,6 @@ impl Reader
 			{
 				Some(block) =>
 				{
-					debug!("Reading BGZF block");
 					bytes.extend_from_slice(&block);
 				}
 				None => break,
@@ -223,26 +206,13 @@ impl Reader
 		// }
 
 		let n_ref = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
-		let format = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
+		let _ = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 		let col_seq = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 		let col_beg = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 		let col_end = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 		let meta = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 		let skip = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 		let l_nm = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
-
-		debug!("magic string = {:?}", unsafe {
-			std::str::from_utf8_unchecked(&magic).to_string()
-		});
-
-		debug!("n_ref = {}", n_ref);
-		debug!("format = {}", format);
-		debug!("col_seq = {}", col_seq);
-		debug!("col_beg = {}", col_beg);
-		debug!("col_end = {}", col_end);
-		debug!("meta = {}", meta);
-		debug!("skip = {}", skip);
-		debug!("l_nm = {}", l_nm);
 
 		let mut seqnames = vec![0u8; l_nm as usize];
 		std::io::Read::read_exact(&mut cursor, &mut seqnames)?;
@@ -254,36 +224,23 @@ impl Reader
 			.map(|seqname| String::from_str(seqname).unwrap())
 			.collect::<BTreeSet<_>>();
 
-		debug!("names = {:?}", seqnames);
-
 		let mut ref_indices = Vec::with_capacity(n_ref as usize);
 
 		for _ in 0..n_ref
 		{
-			//debug!("current_reference = {:?}", current_reference);
-
 			let n_bin = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
-
-			// debug!("n_bin = {}", n_bin);
 
 			let mut bins_map = HashMap::with_capacity(n_bin as usize);
 
 			for _ in 0..n_bin
 			{
-				// debug!("current_bin = {}", current_bin);
-
 				let bin = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
 				let n_chunk = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 
 				let mut chunks = Vec::with_capacity(n_chunk as usize);
 
-				// debug!("bin = {}", bin);
-				// debug!("n_chunk = {:?}", n_chunk);
-
 				for _ in 0..n_chunk
 				{
-					// debug!("current_chunk = {:?}", current_chunk);
-
 					let cnk_beg = ReadBytesExt::read_u64::<LittleEndian>(&mut cursor)?;
 					let cnk_end = ReadBytesExt::read_u64::<LittleEndian>(&mut cursor)?;
 
@@ -291,9 +248,6 @@ impl Reader
 						start: cnk_beg,
 						end: cnk_end,
 					});
-
-					// debug!("cnk_beg = {:?}", cnk_beg);
-					// debug!("cnk_end = {:?}", cnk_end);
 				}
 
 				bins_map.insert(bin, Region { chunks });
@@ -303,22 +257,15 @@ impl Reader
 
 			let n_intv = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 
-			// debug!("n_intv = {:?}", n_intv);
-
 			for _ in 0..n_intv
 			{
-				// debug!("current_interval = {:?}", current_interval);
-
 				let _ioff = ReadBytesExt::read_u64::<LittleEndian>(&mut cursor)?;
-
-				// debug!("ioff = {:?}", ioff);
 			}
 		}
 
-		for (bin, region) in &ref_indices[0].bins
-		{
-			debug!("chr1 bin {} → {:?}", bin, region.chunks);
-		}
+		// for (bin, region) in &ref_indices[0].bins
+		// {
+		// }
 
 		Ok((
 			Header {

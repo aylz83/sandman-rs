@@ -8,12 +8,11 @@ keywords = ["sequencing", "bioinformatics"]
 authors = ["Eilidh Ward"]
 categories = ["science", "filesystem"]
 description = "An asynchronous transparent bed/bgz bed reader with tabix support"
-repository = "https://github.com/aylz83/sandman"
+repository = "https://github.com/aylz83/sandman-rs"
 
 [dependencies]
 byteorder = "1.5.0"
 indexset = "0.12.3"
-log = "0.4.28"
 tokio = { version = "1.47.1", features = ["full"] }
 pufferfish = { git = "https://github.com/aylz83/pufferfish-rs", version = "0.1.2" }
 thiserror = "2.0.17"
