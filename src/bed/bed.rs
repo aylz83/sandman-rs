@@ -167,7 +167,7 @@ impl BrowserMeta
 	}
 }
 
-pub trait BedLine: Debug + BedLineClone
+pub trait BedLine: Debug + BedLineClone + Send + Sync
 {
 	fn tid(&self) -> &str;
 	fn start(&self) -> u32;
