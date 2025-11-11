@@ -19,6 +19,7 @@ use crate::bed::Bed5Extra;
 use crate::bed::Bed6Extra;
 use crate::bed::Bed12Extra;
 use crate::bed::BedMethylExtra;
+use crate::store::TidResolver;
 
 fn is_key_char(c: char) -> bool
 {
@@ -113,7 +114,10 @@ fn parse_strand(input: &[u8]) -> IResult<&[u8], Strand>
 	.parse(input)
 }
 
-pub(crate) fn parse_bed3_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed3Fields>>
+pub(crate) fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: &mut R,
+	input: &'a [u8],
+) -> IResult<&'a [u8], BedRecord<R::Tid, Bed3Fields>>
 {
 	let (input, (tid, _, start, _, end, _)) = (
 		parse_string,
@@ -124,10 +128,16 @@ pub(crate) fn parse_bed3_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed3Fi
 		line_ending,
 	)
 		.parse(input)?;
-	Ok((input, BedRecord::new(tid, start, end)))
+	Ok((
+		input,
+		BedRecord::new(resolver.to_symbol_id(&tid), start, end),
+	))
 }
 
-pub(crate) fn parse_bed4_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed4Extra>>
+pub(crate) fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: &mut R,
+	input: &'a [u8],
+) -> IResult<&'a [u8], BedRecord<R::Tid, Bed4Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _)) = (
 		parse_string,
@@ -140,10 +150,18 @@ pub(crate) fn parse_bed4_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed4Ex
 		line_ending,
 	)
 		.parse(input)?;
-	Ok((input, BedRecord::new(tid, start, end).with_name(name)))
+	Ok((
+		input,
+		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
+			.clone()
+			.with_name(name),
+	))
 }
 
-pub(crate) fn parse_bed5_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed5Extra>>
+pub(crate) fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: &mut R,
+	input: &'a [u8],
+) -> IResult<&'a [u8], BedRecord<R::Tid, Bed5Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _)) = (
 		parse_string,
@@ -160,13 +178,16 @@ pub(crate) fn parse_bed5_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed5Ex
 		.parse(input)?;
 	Ok((
 		input,
-		BedRecord::new(tid, start, end)
+		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
 			.with_name(name)
 			.with_score(Some(score)),
 	))
 }
 
-pub(crate) fn parse_bed6_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed6Extra>>
+pub(crate) fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: &mut R,
+	input: &'a [u8],
+) -> IResult<&'a [u8], BedRecord<R::Tid, Bed6Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand, _)) = (
 		parse_string,
@@ -185,14 +206,17 @@ pub(crate) fn parse_bed6_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed6Ex
 		.parse(input)?;
 	Ok((
 		input,
-		BedRecord::new(tid, start, end)
+		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
 			.with_name(name)
 			.with_score(Some(score))
 			.with_strand(strand),
 	))
 }
 
-pub(crate) fn parse_bed12_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed12Extra>>
+pub(crate) fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: &mut R,
+	input: &'a [u8],
+) -> IResult<&'a [u8], BedRecord<R::Tid, Bed12Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
 		parse_string,
@@ -256,7 +280,7 @@ pub(crate) fn parse_bed12_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed12
 
 	Ok((
 		input,
-		BedRecord::new(tid, start, end)
+		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
 			.with_name(name)
 			.with_score(Some(score))
 			.with_strand(strand)
@@ -278,7 +302,10 @@ pub(crate) fn parse_bed12_record(input: &[u8]) -> IResult<&[u8], BedRecord<Bed12
 	))
 }
 
-pub(crate) fn parse_bedmethyl_record(input: &[u8]) -> IResult<&[u8], BedRecord<BedMethylExtra>>
+pub(crate) fn parse_bedmethyl_record<'a, R: TidResolver>(
+	resolver: &mut R,
+	input: &'a [u8],
+) -> IResult<&'a [u8], BedRecord<R::Tid, BedMethylExtra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
 		parse_string,
@@ -353,7 +380,7 @@ pub(crate) fn parse_bedmethyl_record(input: &[u8]) -> IResult<&[u8], BedRecord<B
 
 	Ok((
 		input,
-		BedRecord::new(tid, start, end)
+		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
 			.with_name(name)
 			.with_score(Some(score))
 			.with_strand(strand)

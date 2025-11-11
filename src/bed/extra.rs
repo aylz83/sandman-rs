@@ -1,6 +1,8 @@
 use crate::bed::Strand;
 use crate::bed::BedRecord;
 
+use std::fmt::Debug;
+
 #[derive(Debug, Clone)]
 pub struct Bed4Extra
 {
@@ -56,9 +58,11 @@ pub struct BedMethylExtra
 	pub n_nocall: u32,
 }
 
-impl BedRecord<Bed4Extra>
+impl<Tid> BedRecord<Tid, Bed4Extra>
+where
+	Tid: Clone + Debug + Send + Sync,
 {
-	pub fn with_score(self, score: Option<u32>) -> BedRecord<Bed5Extra>
+	pub fn with_score(self, score: Option<u32>) -> BedRecord<Tid, Bed5Extra>
 	{
 		BedRecord {
 			tid: self.tid,
@@ -72,9 +76,11 @@ impl BedRecord<Bed4Extra>
 	}
 }
 
-impl BedRecord<Bed5Extra>
+impl<Tid> BedRecord<Tid, Bed5Extra>
+where
+	Tid: Clone + Debug + Send + Sync,
 {
-	pub fn with_strand(self, strand: Strand) -> BedRecord<Bed6Extra>
+	pub fn with_strand(self, strand: Strand) -> BedRecord<Tid, Bed6Extra>
 	{
 		BedRecord {
 			tid: self.tid,
@@ -89,7 +95,9 @@ impl BedRecord<Bed5Extra>
 	}
 }
 
-impl BedRecord<Bed6Extra>
+impl<Tid> BedRecord<Tid, Bed6Extra>
+where
+	Tid: Clone + Debug + Send + Sync,
 {
 	pub fn with_bed12(
 		self,
@@ -99,7 +107,7 @@ impl BedRecord<Bed6Extra>
 		block_count: u32,
 		block_sizes: Vec<u32>,
 		block_starts: Vec<u32>,
-	) -> BedRecord<Bed12Extra>
+	) -> BedRecord<Tid, Bed12Extra>
 	{
 		BedRecord {
 			tid: self.tid,
@@ -133,7 +141,7 @@ impl BedRecord<Bed6Extra>
 		n_fail: u32,
 		n_diff: u32,
 		n_nocall: u32,
-	) -> BedRecord<BedMethylExtra>
+	) -> BedRecord<Tid, BedMethylExtra>
 	{
 		BedRecord {
 			tid: self.tid,

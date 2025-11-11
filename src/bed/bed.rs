@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 pub use crate::bed::record::*;
 pub use crate::bed::extra::*;
+use crate::store::TidResolver;
 
 #[macro_export]
 macro_rules! record {
@@ -10,7 +11,7 @@ macro_rules! record {
     ($chr:expr, $start:expr, $end:expr) => {{
         Box::new(
             $crate::bed::BedRecord::new($chr, $start, $end)
-        ) as Box<dyn $crate::bed::BedLine>
+        ) as Box<dyn $crate::bed::BedLine<_>>
     }};
 
     // BED4
@@ -18,7 +19,7 @@ macro_rules! record {
         Box::new(
             $crate::bed::BedRecord::new($chr, $start, $end)
                 .with_name($name)
-        ) as Box<dyn $crate::bed::BedLine>
+        ) as Box<dyn $crate::bed::BedLine<_>>
     }};
 
     // BED5
@@ -27,7 +28,7 @@ macro_rules! record {
             $crate::bed::BedRecord::new($chr, $start, $end)
                 .with_name($name)
                 .with_score(Some($score))
-        ) as Box<dyn $crate::bed::BedLine>
+        ) as Box<dyn $crate::bed::BedLine<_>>
     }};
 
     // BED6
@@ -37,7 +38,7 @@ macro_rules! record {
                 .with_name($name)
                 .with_score(Some($score))
                 .with_strand($strand.into())
-        ) as Box<dyn $crate::bed::BedLine>
+        ) as Box<dyn $crate::bed::BedLine<_>>
     }};
 
     // BED12
@@ -57,7 +58,7 @@ macro_rules! record {
                     $block_sizes,
                     $block_starts,
                 )
-        ) as Box<dyn $crate::bed::BedLine>
+        ) as Box<dyn $crate::bed::BedLine<_>>
     }};
 
     // BEDMethyl
@@ -84,7 +85,7 @@ macro_rules! record {
                     $n_diff,
                     $n_nocall,
                 )
-        ) as Box<dyn $crate::bed::BedLine>
+        ) as Box<dyn $crate::bed::BedLine<_>>
     }};
 }
 
@@ -167,9 +168,17 @@ impl BrowserMeta
 	}
 }
 
-pub trait BedLine: Debug + BedLineClone + Send + Sync
+pub trait BedLine<Tid>: Debug + BedLineClone<Tid> + Send + Sync
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
-	fn tid(&self) -> &str;
+	fn tid(&self) -> &Tid;
+
+	fn pretty_tid<'a>(&'a self, resolver: &'a mut dyn TidResolver<Tid = Tid>) -> Option<&'a str>
+	{
+		resolver.from_symbol_id(self.tid())
+	}
+
 	fn start(&self) -> u32;
 	fn end(&self) -> u32;
 	fn name(&self) -> Option<&str>
@@ -269,32 +278,35 @@ pub trait BedLine: Debug + BedLineClone + Send + Sync
 	}
 }
 
-pub trait BedLineClone
+pub trait BedLineClone<Tid>
 {
-	fn clone_box(&self) -> Box<dyn BedLine>;
+	fn clone_box(&self) -> Box<dyn BedLine<Tid>>;
 }
 
-impl<T> BedLineClone for T
+impl<T, Tid> BedLineClone<Tid> for T
 where
-	T: 'static + BedLine + Clone,
+	T: 'static + BedLine<Tid> + Clone,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
-	fn clone_box(&self) -> Box<dyn BedLine>
+	fn clone_box(&self) -> Box<dyn BedLine<Tid>>
 	{
 		Box::new(self.clone())
 	}
 }
 
-impl Clone for Box<dyn BedLine>
+impl<Tid> Clone for Box<dyn BedLine<Tid>>
 {
-	fn clone(&self) -> Box<dyn BedLine>
+	fn clone(&self) -> Box<dyn BedLine<Tid>>
 	{
 		self.clone_box()
 	}
 }
 
-impl BedLine for BedRecord<Bed3Fields>
+impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed3Fields>
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
-	fn tid(&self) -> &str
+	fn tid(&self) -> &Tid
 	{
 		&self.tid
 	}
@@ -308,9 +320,11 @@ impl BedLine for BedRecord<Bed3Fields>
 	}
 }
 
-impl BedLine for BedRecord<Bed4Extra>
+impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed4Extra>
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
-	fn tid(&self) -> &str
+	fn tid(&self) -> &Tid
 	{
 		&self.tid
 	}
@@ -328,9 +342,11 @@ impl BedLine for BedRecord<Bed4Extra>
 	}
 }
 
-impl BedLine for BedRecord<Bed5Extra>
+impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed5Extra>
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
-	fn tid(&self) -> &str
+	fn tid(&self) -> &Tid
 	{
 		&self.tid
 	}
@@ -352,9 +368,11 @@ impl BedLine for BedRecord<Bed5Extra>
 	}
 }
 
-impl BedLine for BedRecord<Bed6Extra>
+impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed6Extra>
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
-	fn tid(&self) -> &str
+	fn tid(&self) -> &Tid
 	{
 		&self.tid
 	}
@@ -380,9 +398,11 @@ impl BedLine for BedRecord<Bed6Extra>
 	}
 }
 
-impl BedLine for BedRecord<Bed12Extra>
+impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed12Extra>
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
-	fn tid(&self) -> &str
+	fn tid(&self) -> &Tid
 	{
 		&self.tid
 	}
@@ -432,9 +452,11 @@ impl BedLine for BedRecord<Bed12Extra>
 	}
 }
 
-impl BedLine for BedRecord<BedMethylExtra>
+impl<Tid> BedLine<Tid> for BedRecord<Tid, BedMethylExtra>
+where
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
-	fn tid(&self) -> &str
+	fn tid(&self) -> &Tid
 	{
 		&self.tid
 	}
@@ -509,4 +531,4 @@ impl BedLine for BedRecord<BedMethylExtra>
 	}
 }
 
-pub type Record = Box<dyn BedLine>;
+pub type Record<Tid> = Box<dyn BedLine<Tid>>;

@@ -1,0 +1,44 @@
+pub mod interning;
+
+use std::fmt::Debug;
+
+#[cfg(feature = "interning")]
+pub use crate::store::interning::*;
+
+pub trait TidResolver
+{
+	type Tid: Clone + Debug + Send + Sync + PartialEq;
+	fn to_symbol_id(&mut self, input: &str) -> Self::Tid;
+	fn from_symbol_id<'a>(&'a mut self, input: &'a Self::Tid) -> Option<&'a str>;
+}
+
+#[cfg(not(feature = "interning"))]
+impl TidResolver for ()
+{
+	type Tid = String;
+	fn to_symbol_id(&mut self, input: &str) -> Self::Tid
+	{
+		input.to_owned()
+	}
+
+	fn from_symbol_id<'a>(&'a mut self, input: &'a Self::Tid) -> Option<&'a str>
+	{
+		Some(input)
+	}
+}
+
+#[cfg(feature = "interning")]
+impl TidResolver for TidStore
+{
+	type Tid = string_interner::DefaultSymbol;
+
+	fn to_symbol_id(&mut self, input: &str) -> Self::Tid
+	{
+		self.intern(input)
+	}
+
+	fn from_symbol_id<'a>(&'a mut self, input: &'a Self::Tid) -> Option<&'a str>
+	{
+		self.resolve(input)
+	}
+}

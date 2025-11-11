@@ -23,6 +23,10 @@ use crate::bed::parser::parse_bed5_record;
 use crate::bed::parser::parse_bed6_record;
 use crate::bed::parser::parse_bed12_record;
 use crate::bed::parser::parse_bedmethyl_record;
+use crate::store::TidResolver;
+
+#[cfg(feature = "interning")]
+use crate::store::TidStore;
 
 enum FileKind<R>
 where
@@ -132,9 +136,10 @@ impl TryFrom<&Vec<String>> for BedFormat
 	}
 }
 
-pub struct Reader<R>
+pub struct Reader<R, T>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	T: TidResolver + std::clone::Clone + std::fmt::Debug,
 {
 	reader: FileKind<R>,
 	pub format: BedFormat,
@@ -144,50 +149,86 @@ where
 	track_line: Option<Track>,
 	last_browser: Option<BrowserMeta>,
 	reset_browser: bool,
+	resolver: T,
 }
 
-impl Reader<TokioFile>
+#[cfg(not(feature = "interning"))]
+impl Reader<TokioFile, ()>
 {
 	pub async fn from_path<P>(path: P, tabix_path: Option<P>) -> error::Result<Self>
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
-		let path = path.as_ref();
-
-		let gzip_file = TokioFile::open(path).await?;
-
-		let tabix_file = if let Some(tabix_path) = tabix_path
-		{
-			Some(TokioFile::open(tabix_path).await?)
-		}
-		else if path.extension().and_then(|ext| ext.to_str()) == Some("gz")
-		{
-			let mut tbi_path = PathBuf::from(path);
-			tbi_path.set_extension("gz.tbi");
-
-			if tokio::fs::metadata(&tbi_path).await.is_ok()
-			{
-				Some(TokioFile::open(tbi_path).await?)
-			}
-			else
-			{
-				None
-			}
-		}
-		else
-		{
-			None
-		};
-
+		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
 		Self::from_reader(gzip_file, tabix_file).await
 	}
 }
 
-impl<R> Reader<R>
+#[cfg(feature = "interning")]
+impl Reader<TokioFile, TidStore>
+{
+	pub async fn from_path<P>(path: P, tabix_path: Option<P>) -> error::Result<Self>
+	where
+		P: AsRef<Path> + std::marker::Copy,
+	{
+		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
+		Self::from_reader(gzip_file, tabix_file).await
+	}
+}
+
+#[cfg(not(feature = "interning"))]
+impl<R> Reader<R, ()>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 {
 	pub async fn from_reader(reader: R, tbi_reader: Option<R>) -> error::Result<Self>
+	{
+		let (format, reader, tbi_reader) = Self::open_bed_readers(reader, tbi_reader).await?;
+
+		Ok(Reader {
+			reader,
+			format,
+			tbi_reader,
+			bgz_buffer: String::new(),
+			track_line: None,
+			last_browser: None,
+			reset_browser: true,
+			resolver: (),
+		})
+	}
+}
+
+#[cfg(feature = "interning")]
+impl<R> Reader<R, TidStore>
+where
+	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+{
+	pub async fn from_reader(reader: R, tbi_reader: Option<R>) -> error::Result<Self>
+	{
+		let (format, reader, tbi_reader) = Self::open_bed_readers(reader, tbi_reader).await?;
+
+		Ok(Reader {
+			reader,
+			format,
+			tbi_reader,
+			bgz_buffer: String::new(),
+			track_line: None,
+			last_browser: None,
+			reset_browser: true,
+			resolver: TidStore::default(),
+		})
+	}
+}
+
+impl<R, T> Reader<R, T>
+where
+	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + 'static,
+{
+	async fn open_bed_readers(
+		reader: R,
+		tbi_reader: Option<R>,
+	) -> error::Result<(BedFormat, FileKind<R>, Option<tabix::Reader>)>
 	{
 		let mut reader = TokioBufReader::new(reader);
 
@@ -227,15 +268,44 @@ where
 			None => None,
 		};
 
-		Ok(Reader {
-			reader,
-			format,
-			tbi_reader,
-			bgz_buffer: String::new(),
-			track_line: None,
-			last_browser: None,
-			reset_browser: true,
-		})
+		Ok((format, reader, tbi_reader))
+	}
+
+	async fn open_bed_files<P>(
+		path: P,
+		tabix_path: Option<P>,
+	) -> error::Result<(TokioFile, Option<TokioFile>)>
+	where
+		P: AsRef<Path> + Copy,
+	{
+		let path = path.as_ref();
+
+		let gzip_file = TokioFile::open(path).await?;
+
+		let tabix_file = if let Some(tabix_path) = tabix_path
+		{
+			Some(TokioFile::open(tabix_path).await?)
+		}
+		else if path.extension().and_then(|ext| ext.to_str()) == Some("gz")
+		{
+			let mut tbi_path = PathBuf::from(path);
+			tbi_path.set_extension("gz.tbi");
+
+			if tokio::fs::metadata(&tbi_path).await.is_ok()
+			{
+				Some(TokioFile::open(&tbi_path).await?)
+			}
+			else
+			{
+				None
+			}
+		}
+		else
+		{
+			None
+		};
+
+		Ok((gzip_file, tabix_file))
 	}
 
 	async fn detect_bed_format<B: AsyncBufRead + Unpin>(
@@ -338,6 +408,11 @@ where
 		}
 	}
 
+	pub fn store(&mut self) -> &mut T
+	{
+		&mut self.resolver
+	}
+
 	pub async fn seek_to_start(&mut self) -> error::Result<()>
 	{
 		match &mut self.reader
@@ -355,7 +430,7 @@ where
 		Ok(())
 	}
 
-	pub async fn read_line(&mut self) -> error::Result<Option<(&Option<Track>, Record)>>
+	pub async fn read_line(&mut self) -> error::Result<Option<(&Option<Track>, Record<T::Tid>)>>
 	{
 		while let Some(line) = self.read_line_io().await?
 		{
@@ -386,7 +461,7 @@ where
 	pub async fn read_line_with_meta(
 		&mut self,
 		browser_meta: &mut Option<BrowserMeta>,
-	) -> error::Result<Option<(&Option<Track>, Record)>>
+	) -> error::Result<Option<(&Option<Track>, Record<T::Tid>)>>
 	{
 		while let Some(line) = self.read_line_io().await?
 		{
@@ -479,48 +554,48 @@ where
 		}
 	}
 
-	fn parse_record(&self, line_bytes: &[u8]) -> error::Result<Record>
+	fn parse_record(&mut self, line_bytes: &[u8]) -> error::Result<Record<T::Tid>>
 	{
 		match self.format
 		{
 			BedFormat::BED3 { .. } =>
 			{
-				let (_, r) = parse_bed3_record(line_bytes)
+				let (_, r) = parse_bed3_record(&mut self.resolver, line_bytes)
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED4 { .. } =>
 			{
-				let (_, r) = parse_bed4_record(line_bytes)
+				let (_, r) = parse_bed4_record(&mut self.resolver, line_bytes)
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED5 { .. } =>
 			{
-				let (_, r) = parse_bed5_record(line_bytes)
+				let (_, r) = parse_bed5_record(&mut self.resolver, line_bytes)
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED6 { .. } =>
 			{
-				let (_, r) = parse_bed6_record(line_bytes)
+				let (_, r) = parse_bed6_record(&mut self.resolver, line_bytes)
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED12 { .. } =>
 			{
-				let (_, r) = parse_bed12_record(line_bytes)
+				let (_, r) = parse_bed12_record(&mut self.resolver, line_bytes)
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BEDMethyl { .. } =>
 			{
-				let (_, r) = parse_bedmethyl_record(line_bytes)
+				let (_, r) = parse_bedmethyl_record(&mut self.resolver, line_bytes)
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
@@ -596,7 +671,10 @@ where
 		Ok(buffer)
 	}
 
-	pub async fn read_lines_in_tid(&mut self, tid: &str) -> error::Result<Option<Vec<Record>>>
+	pub async fn read_lines_in_tid(
+		&mut self,
+		tid: &str,
+	) -> error::Result<Option<Vec<Record<T::Tid>>>>
 	{
 		if matches!(self.reader, FileKind::Plain(_))
 		{
@@ -624,7 +702,7 @@ where
 		tid: &str,
 		start: u32,
 		end: u32,
-	) -> error::Result<Option<Vec<Record>>>
+	) -> error::Result<Option<Vec<Record<T::Tid>>>>
 	{
 		if matches!(self.reader, FileKind::Plain(_))
 		{
@@ -645,8 +723,10 @@ where
 				{
 					Some(mut records) =>
 					{
+						let tid_id: T::Tid = self.resolver.to_symbol_id(tid);
+
 						records.retain(|rec| {
-							rec.tid() == tid && rec.start() < end && rec.end() > start
+							*rec.tid() == tid_id && rec.start() < end && rec.end() > start
 						});
 						Ok(Some(records))
 					}
@@ -660,72 +740,57 @@ where
 	pub async fn read_lines_in_range(
 		&mut self,
 		region: Vec<Range<u64>>,
-	) -> error::Result<Option<Vec<Record>>>
+	) -> error::Result<Option<Vec<Record<T::Tid>>>>
 	{
 		let bytes = self.read_bytes_for_region(&region).await?;
 
-		let records: Vec<Box<dyn BedLine>> = match self.format
+		let records: Vec<Box<dyn BedLine<T::Tid>>> = match self.format
 		{
-			BedFormat::BED3 {
-				has_tracks: _,
-				has_browsers: _,
-			} => many0(parse_bed3_record)
+			BedFormat::BED3 { .. } => many0(|input| parse_bed3_record(&mut self.resolver, input))
 				.parse(&bytes)
 				.map_err(|_| error::Error::BedFormat)?
 				.1
 				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine>)
+				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
 				.collect(),
-			BedFormat::BED4 {
-				has_tracks: _,
-				has_browsers: _,
-			} => many0(parse_bed4_record)
+			BedFormat::BED4 { .. } => many0(|input| parse_bed4_record(&mut self.resolver, input))
 				.parse(&bytes)
 				.map_err(|_| error::Error::BedFormat)?
 				.1
 				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine>)
+				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
 				.collect(),
-			BedFormat::BED5 {
-				has_tracks: _,
-				has_browsers: _,
-			} => many0(parse_bed5_record)
+			BedFormat::BED5 { .. } => many0(|input| parse_bed5_record(&mut self.resolver, input))
 				.parse(&bytes)
 				.map_err(|_| error::Error::BedFormat)?
 				.1
 				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine>)
+				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
 				.collect(),
-			BedFormat::BED6 {
-				has_tracks: _,
-				has_browsers: _,
-			} => many0(parse_bed6_record)
+			BedFormat::BED6 { .. } => many0(|input| parse_bed6_record(&mut self.resolver, input))
 				.parse(&bytes)
 				.map_err(|_| error::Error::BedFormat)?
 				.1
 				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine>)
+				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
 				.collect(),
-			BedFormat::BED12 {
-				has_tracks: _,
-				has_browsers: _,
-			} => many0(parse_bed12_record)
+			BedFormat::BED12 { .. } => many0(|input| parse_bed12_record(&mut self.resolver, input))
 				.parse(&bytes)
 				.map_err(|_| error::Error::BedFormat)?
 				.1
 				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine>)
+				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
 				.collect(),
-			BedFormat::BEDMethyl {
-				has_tracks: _,
-				has_browsers: _,
-			} => many0(parse_bedmethyl_record)
-				.parse(&bytes)
-				.map_err(|_| error::Error::BedFormat)?
-				.1
-				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine>)
-				.collect(),
+			BedFormat::BEDMethyl { .. } =>
+			{
+				many0(|input| parse_bedmethyl_record(&mut self.resolver, input))
+					.parse(&bytes)
+					.map_err(|_| error::Error::BedFormat)?
+					.1
+					.into_iter()
+					.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
+					.collect()
+			}
 		};
 
 		Ok(Some(records))
