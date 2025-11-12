@@ -178,6 +178,18 @@ impl Reader<TokioFile, TidStore>
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
 		Self::from_reader(gzip_file, tabix_file).await
 	}
+
+	pub async fn from_path_with_resolver<P>(
+		path: P,
+		tabix_path: Option<P>,
+		resolver: Arc<Mutex<TidStore>>,
+	) -> error::Result<Self>
+	where
+		P: AsRef<Path> + std::marker::Copy,
+	{
+		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
+		Self::from_reader_with_resolver(gzip_file, tabix_file, resolver).await
+	}
 }
 
 #[cfg(not(feature = "interning"))]
@@ -220,6 +232,26 @@ where
 			last_browser: None,
 			reset_browser: true,
 			resolver: Arc::new(Mutex::new(TidStore::default())),
+		})
+	}
+
+	pub async fn from_reader_with_resolver(
+		reader: R,
+		tbi_reader: Option<R>,
+		resolver: Arc<Mutex<TidStore>>,
+	) -> error::Result<Self>
+	{
+		let (format, reader, tbi_reader) = Self::open_bed_readers(reader, tbi_reader).await?;
+
+		Ok(Reader {
+			reader,
+			format,
+			tbi_reader,
+			bgz_buffer: String::new(),
+			track_line: None,
+			last_browser: None,
+			reset_browser: true,
+			resolver,
 		})
 	}
 }
