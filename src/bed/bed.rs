@@ -5,6 +5,8 @@ pub use crate::bed::record::*;
 pub use crate::bed::extra::*;
 use crate::store::TidResolver;
 
+use async_trait::async_trait;
+
 #[macro_export]
 macro_rules! record {
     // BED3
@@ -168,16 +170,14 @@ impl BrowserMeta
 	}
 }
 
+#[async_trait]
 pub trait BedLine<Tid>: Debug + BedLineClone<Tid> + Send + Sync
 where
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	fn tid(&self) -> &Tid;
 
-	fn pretty_tid<'a>(&'a self, resolver: &'a mut dyn TidResolver<Tid = Tid>) -> Option<&'a str>
-	{
-		resolver.from_symbol_id(self.tid())
-	}
+	async fn pretty_tid(&self) -> Option<String>;
 
 	fn start(&self) -> u32;
 	fn end(&self) -> u32;
@@ -302,13 +302,20 @@ impl<Tid> Clone for Box<dyn BedLine<Tid>>
 	}
 }
 
-impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed3Fields>
+#[async_trait]
+impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed3Fields>
 where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
 	fn tid(&self) -> &Tid
 	{
 		&self.tid
+	}
+	async fn pretty_tid(&self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
 	fn start(&self) -> u32
 	{
@@ -320,13 +327,20 @@ where
 	}
 }
 
-impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed4Extra>
+#[async_trait]
+impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed4Extra>
 where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
 	fn tid(&self) -> &Tid
 	{
 		&self.tid
+	}
+	async fn pretty_tid(&self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
 	fn start(&self) -> u32
 	{
@@ -342,13 +356,20 @@ where
 	}
 }
 
-impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed5Extra>
+#[async_trait]
+impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed5Extra>
 where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
 	fn tid(&self) -> &Tid
 	{
 		&self.tid
+	}
+	async fn pretty_tid(&self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
 	fn start(&self) -> u32
 	{
@@ -368,13 +389,20 @@ where
 	}
 }
 
-impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed6Extra>
+#[async_trait]
+impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed6Extra>
 where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
 	fn tid(&self) -> &Tid
 	{
 		&self.tid
+	}
+	async fn pretty_tid(&self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
 	fn start(&self) -> u32
 	{
@@ -398,13 +426,20 @@ where
 	}
 }
 
-impl<Tid> BedLine<Tid> for BedRecord<Tid, Bed12Extra>
+#[async_trait]
+impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed12Extra>
 where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
 	fn tid(&self) -> &Tid
 	{
 		&self.tid
+	}
+	async fn pretty_tid(&self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
 	fn start(&self) -> u32
 	{
@@ -452,13 +487,20 @@ where
 	}
 }
 
-impl<Tid> BedLine<Tid> for BedRecord<Tid, BedMethylExtra>
+#[async_trait]
+impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, BedMethylExtra>
 where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
 {
 	fn tid(&self) -> &Tid
 	{
 		&self.tid
+	}
+	async fn pretty_tid(&self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
 	fn start(&self) -> u32
 	{

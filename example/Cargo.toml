@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 env_logger = "0.11.8"
-sandman = { path = "../" }
+sandman = { path = "../", features = ["interning"] }
 tokio = { version = "1.47.1", features = ["full"] }
 
 [[bin]]

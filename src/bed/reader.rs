@@ -2,11 +2,14 @@ use std::path::Path;
 use std::ops::Range;
 use std::io::{SeekFrom, Cursor, BufReader, Seek, Read};
 use std::path::PathBuf;
+use std::borrow::BorrowMut;
 
-use nom::{Parser, Finish, multi::many0};
+use nom::Finish;
 
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use pufferfish::BGZ;
 
@@ -15,6 +18,7 @@ use crate::AsyncReadSeek;
 use crate::tabix;
 use crate::bed::*;
 
+use crate::bed::parser::parse_all_records;
 use crate::bed::parser::parse_browser_line;
 use crate::bed::parser::parse_track_line;
 use crate::bed::parser::parse_bed3_record;
@@ -139,7 +143,7 @@ impl TryFrom<&Vec<String>> for BedFormat
 pub struct Reader<R, T>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
-	T: TidResolver + std::clone::Clone + std::fmt::Debug,
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync,
 {
 	reader: FileKind<R>,
 	pub format: BedFormat,
@@ -149,7 +153,7 @@ where
 	track_line: Option<Track>,
 	last_browser: Option<BrowserMeta>,
 	reset_browser: bool,
-	resolver: T,
+	resolver: Arc<Mutex<T>>,
 }
 
 #[cfg(not(feature = "interning"))]
@@ -193,7 +197,7 @@ where
 			track_line: None,
 			last_browser: None,
 			reset_browser: true,
-			resolver: (),
+			resolver: Arc::new(Mutex::new(())),
 		})
 	}
 }
@@ -215,7 +219,7 @@ where
 			track_line: None,
 			last_browser: None,
 			reset_browser: true,
-			resolver: TidStore::default(),
+			resolver: Arc::new(Mutex::new(TidStore::default())),
 		})
 	}
 }
@@ -223,7 +227,7 @@ where
 impl<R, T> Reader<R, T>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
-	T: TidResolver + std::clone::Clone + std::fmt::Debug + 'static,
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 {
 	async fn open_bed_readers(
 		reader: R,
@@ -408,9 +412,9 @@ where
 		}
 	}
 
-	pub fn store(&mut self) -> &mut T
+	pub async fn store(&mut self) -> Arc<Mutex<T>>
 	{
-		&mut self.resolver
+		self.resolver.clone()
 	}
 
 	pub async fn seek_to_start(&mut self) -> error::Result<()>
@@ -451,7 +455,7 @@ where
 				continue;
 			}
 
-			let record = self.parse_record(line_bytes)?;
+			let record = self.parse_record(line_bytes).await?;
 			return Ok(Some((&self.track_line, record)));
 		}
 
@@ -507,7 +511,7 @@ where
 
 			self.reset_browser = true;
 
-			let record = self.parse_record(line_bytes)?;
+			let record = self.parse_record(line_bytes).await?;
 			*browser_meta = self.last_browser.clone();
 
 			return Ok(Some((&self.track_line, record)));
@@ -554,48 +558,54 @@ where
 		}
 	}
 
-	fn parse_record(&mut self, line_bytes: &[u8]) -> error::Result<Record<T::Tid>>
+	async fn parse_record(&mut self, line_bytes: &[u8]) -> error::Result<Record<T::Tid>>
 	{
 		match self.format
 		{
 			BedFormat::BED3 { .. } =>
 			{
-				let (_, r) = parse_bed3_record(&mut self.resolver, line_bytes)
+				let (_, r) = parse_bed3_record(self.resolver.clone(), &line_bytes)
+					.await
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED4 { .. } =>
 			{
-				let (_, r) = parse_bed4_record(&mut self.resolver, line_bytes)
+				let (_, r) = parse_bed4_record(self.resolver.clone(), &line_bytes)
+					.await
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED5 { .. } =>
 			{
-				let (_, r) = parse_bed5_record(&mut self.resolver, line_bytes)
+				let (_, r) = parse_bed5_record(self.resolver.clone(), &line_bytes)
+					.await
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED6 { .. } =>
 			{
-				let (_, r) = parse_bed6_record(&mut self.resolver, line_bytes)
+				let (_, r) = parse_bed6_record(self.resolver.clone(), &line_bytes)
+					.await
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED12 { .. } =>
 			{
-				let (_, r) = parse_bed12_record(&mut self.resolver, line_bytes)
+				let (_, r) = parse_bed12_record(self.resolver.clone(), &line_bytes)
+					.await
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BEDMethyl { .. } =>
 			{
-				let (_, r) = parse_bedmethyl_record(&mut self.resolver, line_bytes)
+				let (_, r) = parse_bedmethyl_record(self.resolver.clone(), &line_bytes)
+					.await
 					.finish()
 					.map_err(|_| error::Error::BedFormat)?;
 				Ok(Box::new(r))
@@ -719,11 +729,13 @@ where
 					return Ok(None);
 				};
 
-				match self.read_lines_in_range(ranges).await?
+				let lines = self.read_lines_in_range(ranges).await?;
+				let resolver = &mut self.resolver.borrow_mut();
+				match lines
 				{
 					Some(mut records) =>
 					{
-						let tid_id: T::Tid = self.resolver.to_symbol_id(tid);
+						let tid_id: T::Tid = resolver.lock().await.to_symbol_id(tid);
 
 						records.retain(|rec| {
 							*rec.tid() == tid_id && rec.start() < end && rec.end() > start
@@ -746,50 +758,29 @@ where
 
 		let records: Vec<Box<dyn BedLine<T::Tid>>> = match self.format
 		{
-			BedFormat::BED3 { .. } => many0(|input| parse_bed3_record(&mut self.resolver, input))
-				.parse(&bytes)
-				.map_err(|_| error::Error::BedFormat)?
-				.1
-				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
-				.collect(),
-			BedFormat::BED4 { .. } => many0(|input| parse_bed4_record(&mut self.resolver, input))
-				.parse(&bytes)
-				.map_err(|_| error::Error::BedFormat)?
-				.1
-				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
-				.collect(),
-			BedFormat::BED5 { .. } => many0(|input| parse_bed5_record(&mut self.resolver, input))
-				.parse(&bytes)
-				.map_err(|_| error::Error::BedFormat)?
-				.1
-				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
-				.collect(),
-			BedFormat::BED6 { .. } => many0(|input| parse_bed6_record(&mut self.resolver, input))
-				.parse(&bytes)
-				.map_err(|_| error::Error::BedFormat)?
-				.1
-				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
-				.collect(),
-			BedFormat::BED12 { .. } => many0(|input| parse_bed12_record(&mut self.resolver, input))
-				.parse(&bytes)
-				.map_err(|_| error::Error::BedFormat)?
-				.1
-				.into_iter()
-				.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
-				.collect(),
+			BedFormat::BED3 { .. } =>
+			{
+				parse_all_records(&bytes, || self.resolver.clone(), parse_bed3_record).await?
+			}
+			BedFormat::BED4 { .. } =>
+			{
+				parse_all_records(&bytes, || self.resolver.clone(), parse_bed4_record).await?
+			}
+			BedFormat::BED5 { .. } =>
+			{
+				parse_all_records(&bytes, || self.resolver.clone(), parse_bed5_record).await?
+			}
+			BedFormat::BED6 { .. } =>
+			{
+				parse_all_records(&bytes, || self.resolver.clone(), parse_bed6_record).await?
+			}
+			BedFormat::BED12 { .. } =>
+			{
+				parse_all_records(&bytes, || self.resolver.clone(), parse_bed12_record).await?
+			}
 			BedFormat::BEDMethyl { .. } =>
 			{
-				many0(|input| parse_bedmethyl_record(&mut self.resolver, input))
-					.parse(&bytes)
-					.map_err(|_| error::Error::BedFormat)?
-					.1
-					.into_iter()
-					.map(|r| Box::new(r) as Box<dyn BedLine<T::Tid>>)
-					.collect()
+				parse_all_records(&bytes, || self.resolver.clone(), parse_bedmethyl_record).await?
 			}
 		};
 

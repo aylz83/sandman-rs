@@ -1,5 +1,6 @@
 use crate::bed::Strand;
 use crate::bed::BedRecord;
+use crate::store::TidResolver;
 
 use std::fmt::Debug;
 
@@ -58,13 +59,15 @@ pub struct BedMethylExtra
 	pub n_nocall: u32,
 }
 
-impl<Tid> BedRecord<Tid, Bed4Extra>
+impl<Resolver, Tid> BedRecord<Resolver, Tid, Bed4Extra>
 where
+	Resolver: TidResolver,
 	Tid: Clone + Debug + Send + Sync,
 {
-	pub fn with_score(self, score: Option<u32>) -> BedRecord<Tid, Bed5Extra>
+	pub fn with_score(self, score: Option<u32>) -> BedRecord<Resolver, Tid, Bed5Extra>
 	{
 		BedRecord {
+			resolver: self.resolver,
 			tid: self.tid,
 			start: self.start,
 			end: self.end,
@@ -76,13 +79,15 @@ where
 	}
 }
 
-impl<Tid> BedRecord<Tid, Bed5Extra>
+impl<Resolver, Tid> BedRecord<Resolver, Tid, Bed5Extra>
 where
+	Resolver: TidResolver,
 	Tid: Clone + Debug + Send + Sync,
 {
-	pub fn with_strand(self, strand: Strand) -> BedRecord<Tid, Bed6Extra>
+	pub fn with_strand(self, strand: Strand) -> BedRecord<Resolver, Tid, Bed6Extra>
 	{
 		BedRecord {
+			resolver: self.resolver,
 			tid: self.tid,
 			start: self.start,
 			end: self.end,
@@ -95,8 +100,9 @@ where
 	}
 }
 
-impl<Tid> BedRecord<Tid, Bed6Extra>
+impl<Resolver, Tid> BedRecord<Resolver, Tid, Bed6Extra>
 where
+	Resolver: TidResolver,
 	Tid: Clone + Debug + Send + Sync,
 {
 	pub fn with_bed12(
@@ -107,9 +113,10 @@ where
 		block_count: u32,
 		block_sizes: Vec<u32>,
 		block_starts: Vec<u32>,
-	) -> BedRecord<Tid, Bed12Extra>
+	) -> BedRecord<Resolver, Tid, Bed12Extra>
 	{
 		BedRecord {
+			resolver: self.resolver,
 			tid: self.tid,
 			start: self.start,
 			end: self.end,
@@ -141,9 +148,10 @@ where
 		n_fail: u32,
 		n_diff: u32,
 		n_nocall: u32,
-	) -> BedRecord<Tid, BedMethylExtra>
+	) -> BedRecord<Resolver, Tid, BedMethylExtra>
 	{
 		BedRecord {
+			resolver: self.resolver,
 			tid: self.tid,
 			start: self.start,
 			end: self.end,

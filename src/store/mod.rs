@@ -5,6 +5,12 @@ use std::fmt::Debug;
 #[cfg(feature = "interning")]
 pub use crate::store::interning::*;
 
+#[cfg(feature = "interning")]
+pub type DefaultTid = string_interner::DefaultSymbol;
+
+#[cfg(not(feature = "interning"))]
+pub type DefaultTid = String;
+
 pub trait TidResolver
 {
 	type Tid: Clone + Debug + Send + Sync + PartialEq;

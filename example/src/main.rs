@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()>
 	{
 		println!("Browser meta data = {:?}", browser_meta);
 		println!("Bed line: {:?} in track {:?}", line, track);
-		println!("Resolved tid = {:?}", line.pretty_tid(reader.store()));
+		println!("Resolved tid = {:?}", line.pretty_tid().await);
 	}
 
 	Ok(())

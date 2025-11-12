@@ -7,8 +7,13 @@ use nom::bytes::complete::{is_not, take_while1, take_till1, tag};
 use nom::combinator::{map_res, opt};
 use nom::multi::many0;
 
+use tokio::sync::Mutex;
+
+use std::sync::Arc;
+use std::fmt::Debug;
 use std::collections::HashMap;
 
+use crate::bed::BedLine;
 use crate::bed::BrowserMeta;
 use crate::bed::Track;
 use crate::bed::Strand;
@@ -20,6 +25,7 @@ use crate::bed::Bed6Extra;
 use crate::bed::Bed12Extra;
 use crate::bed::BedMethylExtra;
 use crate::store::TidResolver;
+use crate::error;
 
 fn is_key_char(c: char) -> bool
 {
@@ -114,10 +120,37 @@ fn parse_strand(input: &[u8]) -> IResult<&[u8], Strand>
 	.parse(input)
 }
 
-pub(crate) fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: &mut R,
+pub(crate) async fn parse_all_records<'a, Parser, Fut, Record, Tid, Resolver>(
+	bytes: &'a [u8],
+	resolver: impl Fn() -> Resolver,
+	parser: Parser,
+) -> error::Result<Vec<Box<dyn BedLine<Tid>>>>
+where
+	Parser: Fn(Resolver, &'a [u8]) -> Fut,
+	Fut: Future<Output = IResult<&'a [u8], Record>>,
+	Record: BedLine<Tid> + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
+{
+	let mut rest = bytes;
+	let mut results = Vec::new();
+
+	while !rest.is_empty()
+	{
+		let resolver = resolver();
+		let (new_rest, record) = parser(resolver, rest)
+			.await
+			.map_err(|_| error::Error::BedFormat)?;
+		rest = new_rest;
+		results.push(Box::new(record) as Box<dyn BedLine<Tid>>);
+	}
+
+	Ok(results)
+}
+
+pub(crate) async fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: Arc<Mutex<R>>,
 	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R::Tid, Bed3Fields>>
+) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed3Fields>>
 {
 	let (input, (tid, _, start, _, end, _)) = (
 		parse_string,
@@ -128,16 +161,19 @@ pub(crate) fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std::clon
 		line_ending,
 	)
 		.parse(input)?;
+
+	let tid_id = resolver.lock().await.to_symbol_id(&tid);
+
 	Ok((
 		input,
-		BedRecord::new(resolver.to_symbol_id(&tid), start, end),
+		BedRecord::new(Arc::clone(&resolver), tid_id, start, end),
 	))
 }
 
-pub(crate) fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: &mut R,
+pub(crate) async fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: Arc<Mutex<R>>,
 	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R::Tid, Bed4Extra>>
+) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed4Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _)) = (
 		parse_string,
@@ -150,18 +186,21 @@ pub(crate) fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std::clon
 		line_ending,
 	)
 		.parse(input)?;
+
+	let tid_id = resolver.lock().await.to_symbol_id(&tid);
+
 	Ok((
 		input,
-		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
+		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
 			.clone()
 			.with_name(name),
 	))
 }
 
-pub(crate) fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: &mut R,
+pub(crate) async fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: Arc<Mutex<R>>,
 	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R::Tid, Bed5Extra>>
+) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed5Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _)) = (
 		parse_string,
@@ -176,18 +215,21 @@ pub(crate) fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std::clon
 		line_ending,
 	)
 		.parse(input)?;
+
+	let tid_id = resolver.lock().await.to_symbol_id(&tid);
+
 	Ok((
 		input,
-		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
+		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
 			.with_name(name)
 			.with_score(Some(score)),
 	))
 }
 
-pub(crate) fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: &mut R,
+pub(crate) async fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: Arc<Mutex<R>>,
 	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R::Tid, Bed6Extra>>
+) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed6Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand, _)) = (
 		parse_string,
@@ -204,19 +246,22 @@ pub(crate) fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std::clon
 		line_ending,
 	)
 		.parse(input)?;
+
+	let tid_id = resolver.lock().await.to_symbol_id(&tid);
+
 	Ok((
 		input,
-		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
+		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
 			.with_name(name)
 			.with_score(Some(score))
 			.with_strand(strand),
 	))
 }
 
-pub(crate) fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: &mut R,
+pub(crate) async fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
+	resolver: Arc<Mutex<R>>,
 	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R::Tid, Bed12Extra>>
+) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed12Extra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
 		parse_string,
@@ -278,9 +323,11 @@ pub(crate) fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + std::clo
 		.map(|s| s.parse::<u32>().unwrap_or(0))
 		.collect::<Vec<_>>();
 
+	let tid_id = resolver.lock().await.to_symbol_id(&tid);
+
 	Ok((
 		input,
-		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
+		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
 			.with_name(name)
 			.with_score(Some(score))
 			.with_strand(strand)
@@ -302,10 +349,10 @@ pub(crate) fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + std::clo
 	))
 }
 
-pub(crate) fn parse_bedmethyl_record<'a, R: TidResolver>(
-	resolver: &mut R,
+pub(crate) async fn parse_bedmethyl_record<'a, R: TidResolver>(
+	resolver: Arc<Mutex<R>>,
 	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R::Tid, BedMethylExtra>>
+) -> IResult<&'a [u8], BedRecord<R, R::Tid, BedMethylExtra>>
 {
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
 		parse_string,
@@ -378,9 +425,11 @@ pub(crate) fn parse_bedmethyl_record<'a, R: TidResolver>(
 	)
 		.parse(input)?;
 
+	let tid_id = resolver.lock().await.to_symbol_id(&tid);
+
 	Ok((
 		input,
-		BedRecord::new(resolver.to_symbol_id(&tid), start, end)
+		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
 			.with_name(name)
 			.with_score(Some(score))
 			.with_strand(strand)
