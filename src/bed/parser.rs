@@ -139,7 +139,7 @@ where
 		let resolver = resolver();
 		let (new_rest, record) = parser(resolver, rest)
 			.await
-			.map_err(|_| error::Error::BedFormat)?;
+			.map_err(|_| error::Error::Parse(String::from_utf8_lossy(bytes).to_string()))?;
 		rest = new_rest;
 		results.push(Box::new(record) as Box<dyn BedLine<Tid>>);
 	}

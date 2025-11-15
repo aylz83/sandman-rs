@@ -3,6 +3,8 @@ use std::ops::Range;
 use std::io::{SeekFrom, Cursor, BufReader, Seek, Read};
 use std::path::PathBuf;
 use std::borrow::BorrowMut;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use nom::Finish;
 
@@ -131,12 +133,12 @@ impl TryFrom<&Vec<String>> for BedFormat
 					has_tracks,
 					has_browsers,
 				}),
-				_ => Err(error::Error::BedFormat),
+				_ => Err(error::Error::Parse(trimmed.to_string())),
 			};
 		}
 
 		// If no valid BED line was found
-		Err(error::Error::BedFormat)
+		Err(error::Error::AutoDetect)
 	}
 }
 
@@ -145,6 +147,7 @@ where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync,
 {
+	name: String,
 	reader: FileKind<R>,
 	pub format: BedFormat,
 
@@ -163,8 +166,19 @@ impl Reader<TokioFile, ()>
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
+		let name = path
+			.as_ref()
+			.file_name()
+			.and_then(|s| s.to_str())
+			.unwrap_or("unknown")
+			.to_string();
+
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
-		Self::from_reader(gzip_file, tabix_file).await
+		let mut reader = Self::from_reader(gzip_file, tabix_file).await?;
+
+		reader.name = name;
+
+		Ok(reader)
 	}
 }
 
@@ -175,8 +189,19 @@ impl Reader<TokioFile, TidStore>
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
+		let name = path
+			.as_ref()
+			.file_name()
+			.and_then(|s| s.to_str())
+			.unwrap_or("unknown")
+			.to_string();
+
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
-		Self::from_reader(gzip_file, tabix_file).await
+		let mut reader = Self::from_reader(gzip_file, tabix_file).await?;
+
+		reader.name = name;
+
+		Ok(reader)
 	}
 
 	pub async fn from_path_with_resolver<P>(
@@ -187,8 +212,19 @@ impl Reader<TokioFile, TidStore>
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
+		let name = path
+			.as_ref()
+			.file_name()
+			.and_then(|s| s.to_str())
+			.unwrap_or("unknown")
+			.to_string();
+
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
-		Self::from_reader_with_resolver(gzip_file, tabix_file, resolver).await
+		let mut reader = Self::from_reader_with_resolver(gzip_file, tabix_file, resolver).await?;
+
+		reader.name = name;
+
+		Ok(reader)
 	}
 }
 
@@ -199,9 +235,16 @@ where
 {
 	pub async fn from_reader(reader: R, tbi_reader: Option<R>) -> error::Result<Self>
 	{
-		let (format, reader, tbi_reader) = Self::open_bed_readers(reader, tbi_reader).await?;
+		static COUNTER: AtomicUsize = AtomicUsize::new(0);
+		let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+		let name = format!("buffer_{}", id);
+
+		let (format, reader, tbi_reader) =
+			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
 		Ok(Reader {
+			name,
 			reader,
 			format,
 			tbi_reader,
@@ -221,9 +264,16 @@ where
 {
 	pub async fn from_reader(reader: R, tbi_reader: Option<R>) -> error::Result<Self>
 	{
-		let (format, reader, tbi_reader) = Self::open_bed_readers(reader, tbi_reader).await?;
+		static COUNTER: AtomicUsize = AtomicUsize::new(0);
+		let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+		let name = format!("buffer_{}", id);
+
+		let (format, reader, tbi_reader) =
+			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
 		Ok(Reader {
+			name,
 			reader,
 			format,
 			tbi_reader,
@@ -241,9 +291,16 @@ where
 		resolver: Arc<Mutex<TidStore>>,
 	) -> error::Result<Self>
 	{
-		let (format, reader, tbi_reader) = Self::open_bed_readers(reader, tbi_reader).await?;
+		static COUNTER: AtomicUsize = AtomicUsize::new(0);
+		let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+		let name = format!("buffer_{}", id);
+
+		let (format, reader, tbi_reader) =
+			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
 		Ok(Reader {
+			name,
 			reader,
 			format,
 			tbi_reader,
@@ -262,6 +319,7 @@ where
 	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 {
 	async fn open_bed_readers(
+		name: &String,
 		reader: R,
 		tbi_reader: Option<R>,
 	) -> error::Result<(BedFormat, FileKind<R>, Option<tabix::Reader>)>
@@ -276,15 +334,15 @@ where
 			let block = reader
 				.read_bgzf_block(Some(pufferfish::is_bgzf_eof))
 				.await
-				.map_err(|_| error::Error::BedFormat)?
-				.ok_or(error::Error::BedFormat)?;
+				.map_err(|_| error::Error::BedFormat(name.clone()))?
+				.ok_or(error::Error::BedFormat(name.clone()))?;
 
 			let mut buffer = TokioBufReader::new(Cursor::new(&block));
-			Self::detect_bed_format(&mut buffer, 10).await?
+			Self::detect_bed_format(name.clone(), &mut buffer, 10).await?
 		}
 		else
 		{
-			Self::detect_bed_format(&mut reader, 10).await?
+			Self::detect_bed_format(name.clone(), &mut reader, 10).await?
 		};
 
 		reader.seek(SeekFrom::Start(0)).await?;
@@ -345,6 +403,7 @@ where
 	}
 
 	async fn detect_bed_format<B: AsyncBufRead + Unpin>(
+		name: String,
 		reader: &mut B,
 		max_lines: usize,
 	) -> error::Result<BedFormat>
@@ -358,7 +417,7 @@ where
 			let bytes_read = reader
 				.read_line(&mut line)
 				.await
-				.map_err(|_| error::Error::BedFormat)?;
+				.map_err(|_| error::Error::BedFormat(name.clone()))?;
 			if bytes_read == 0
 			{
 				break; // EOF
@@ -372,7 +431,7 @@ where
 			}
 		}
 
-		Err(error::Error::BedFormat)
+		Err(error::Error::BedFormat(name))
 	}
 
 	fn extract_line_from_buffer(&mut self) -> Option<(String, &str)>
@@ -439,8 +498,10 @@ where
 			};
 
 			// Append decompressed block to buffer
-			self.bgz_buffer
-				.push_str(std::str::from_utf8(&block).map_err(|_| error::Error::BedFormat)?);
+			self.bgz_buffer.push_str(
+				std::str::from_utf8(&block)
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?,
+			);
 		}
 	}
 
@@ -476,7 +537,7 @@ where
 			{
 				let (_, track) = parse_track_line(&line)
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				self.track_line = Some(track);
 				continue;
 			}
@@ -507,7 +568,7 @@ where
 			{
 				let (_, track) = parse_track_line(&line)
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				self.track_line = Some(track);
 				continue;
 			}
@@ -516,7 +577,7 @@ where
 			{
 				let (_, parsed) = parse_browser_line(&line)
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 
 				if self.reset_browser
 				{
@@ -599,7 +660,7 @@ where
 				let (_, r) = parse_bed3_record(self.resolver.clone(), &line_bytes)
 					.await
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED4 { .. } =>
@@ -607,7 +668,7 @@ where
 				let (_, r) = parse_bed4_record(self.resolver.clone(), &line_bytes)
 					.await
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED5 { .. } =>
@@ -615,7 +676,7 @@ where
 				let (_, r) = parse_bed5_record(self.resolver.clone(), &line_bytes)
 					.await
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED6 { .. } =>
@@ -623,7 +684,7 @@ where
 				let (_, r) = parse_bed6_record(self.resolver.clone(), &line_bytes)
 					.await
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BED12 { .. } =>
@@ -631,7 +692,7 @@ where
 				let (_, r) = parse_bed12_record(self.resolver.clone(), &line_bytes)
 					.await
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				Ok(Box::new(r))
 			}
 			BedFormat::BEDMethyl { .. } =>
@@ -639,7 +700,7 @@ where
 				let (_, r) = parse_bedmethyl_record(self.resolver.clone(), &line_bytes)
 					.await
 					.finish()
-					.map_err(|_| error::Error::BedFormat)?;
+					.map_err(|_| error::Error::BedFormat(self.name.clone()))?;
 				Ok(Box::new(r))
 			}
 		}
@@ -653,7 +714,7 @@ where
 		{
 			FileKind::Plain(_) =>
 			{
-				return Err(error::Error::PlainBedRegion);
+				return Err(error::Error::PlainBedRegion(self.name.clone()));
 			}
 			FileKind::BGZF(reader) =>
 			{
@@ -720,7 +781,7 @@ where
 	{
 		if matches!(self.reader, FileKind::Plain(_))
 		{
-			return Err(error::Error::PlainBedRegion);
+			return Err(error::Error::PlainBedRegion(self.name.clone()));
 		}
 
 		match &self.tbi_reader
@@ -735,7 +796,7 @@ where
 
 				self.read_lines_in_range(ranges).await
 			}
-			None => return Err(error::Error::TabixNotOpen),
+			None => return Err(error::Error::TabixNotOpen(self.name.clone())),
 		}
 	}
 
@@ -748,7 +809,7 @@ where
 	{
 		if matches!(self.reader, FileKind::Plain(_))
 		{
-			return Err(error::Error::PlainBedRegion);
+			return Err(error::Error::PlainBedRegion(self.name.clone()));
 		}
 
 		match &self.tbi_reader
@@ -777,7 +838,7 @@ where
 					None => Ok(None),
 				}
 			}
-			None => return Err(error::Error::TabixNotOpen),
+			None => return Err(error::Error::TabixNotOpen(self.name.clone())),
 		}
 	}
 
