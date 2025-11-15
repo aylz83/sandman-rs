@@ -3,8 +3,6 @@ use std::ops::Range;
 use std::io::{SeekFrom, Cursor, BufReader, Seek, Read};
 use std::path::PathBuf;
 use std::borrow::BorrowMut;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 use nom::Finish;
 
@@ -174,9 +172,7 @@ impl Reader<TokioFile, ()>
 			.to_string();
 
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
-		let mut reader = Self::from_reader(gzip_file, tabix_file).await?;
-
-		reader.name = name;
+		let reader = Self::from_reader(name, gzip_file, tabix_file).await?;
 
 		Ok(reader)
 	}
@@ -197,9 +193,7 @@ impl Reader<TokioFile, TidStore>
 			.to_string();
 
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
-		let mut reader = Self::from_reader(gzip_file, tabix_file).await?;
-
-		reader.name = name;
+		let reader = Self::from_reader(name, gzip_file, tabix_file).await?;
 
 		Ok(reader)
 	}
@@ -220,9 +214,7 @@ impl Reader<TokioFile, TidStore>
 			.to_string();
 
 		let (gzip_file, tabix_file) = Self::open_bed_files(path, tabix_path).await?;
-		let mut reader = Self::from_reader_with_resolver(gzip_file, tabix_file, resolver).await?;
-
-		reader.name = name;
+		let reader = Self::from_reader_with_resolver(name, gzip_file, tabix_file, resolver).await?;
 
 		Ok(reader)
 	}
@@ -233,13 +225,9 @@ impl<R> Reader<R, ()>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 {
-	pub async fn from_reader(reader: R, tbi_reader: Option<R>) -> error::Result<Self>
+	pub async fn from_reader(name: String, reader: R, tbi_reader: Option<R>)
+		-> error::Result<Self>
 	{
-		static COUNTER: AtomicUsize = AtomicUsize::new(0);
-		let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-
-		let name = format!("buffer_{}", id);
-
 		let (format, reader, tbi_reader) =
 			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
@@ -262,13 +250,9 @@ impl<R> Reader<R, TidStore>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 {
-	pub async fn from_reader(reader: R, tbi_reader: Option<R>) -> error::Result<Self>
+	pub async fn from_reader(name: String, reader: R, tbi_reader: Option<R>)
+		-> error::Result<Self>
 	{
-		static COUNTER: AtomicUsize = AtomicUsize::new(0);
-		let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-
-		let name = format!("buffer_{}", id);
-
 		let (format, reader, tbi_reader) =
 			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
@@ -286,16 +270,12 @@ where
 	}
 
 	pub async fn from_reader_with_resolver(
+		name: String,
 		reader: R,
 		tbi_reader: Option<R>,
 		resolver: Arc<Mutex<TidStore>>,
 	) -> error::Result<Self>
 	{
-		static COUNTER: AtomicUsize = AtomicUsize::new(0);
-		let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-
-		let name = format!("buffer_{}", id);
-
 		let (format, reader, tbi_reader) =
 			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
