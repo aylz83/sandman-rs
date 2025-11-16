@@ -179,8 +179,8 @@ where
 
 	async fn pretty_tid(&self) -> Option<String>;
 
-	fn start(&self) -> u32;
-	fn end(&self) -> u32;
+	fn start(&self) -> u64;
+	fn end(&self) -> u64;
 	fn name(&self) -> Option<&str>
 	{
 		None
@@ -195,11 +195,11 @@ where
 	}
 
 	// BED12 extras
-	fn thick_start(&self) -> Option<u32>
+	fn thick_start(&self) -> Option<u64>
 	{
 		None
 	}
-	fn thick_end(&self) -> Option<u32>
+	fn thick_end(&self) -> Option<u64>
 	{
 		None
 	}
@@ -317,11 +317,11 @@ where
 		let mut r = self.resolver.lock().await;
 		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
-	fn start(&self) -> u32
+	fn start(&self) -> u64
 	{
 		self.start
 	}
-	fn end(&self) -> u32
+	fn end(&self) -> u64
 	{
 		self.end
 	}
@@ -342,11 +342,11 @@ where
 		let mut r = self.resolver.lock().await;
 		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
-	fn start(&self) -> u32
+	fn start(&self) -> u64
 	{
 		self.start
 	}
-	fn end(&self) -> u32
+	fn end(&self) -> u64
 	{
 		self.end
 	}
@@ -371,11 +371,11 @@ where
 		let mut r = self.resolver.lock().await;
 		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
-	fn start(&self) -> u32
+	fn start(&self) -> u64
 	{
 		self.start
 	}
-	fn end(&self) -> u32
+	fn end(&self) -> u64
 	{
 		self.end
 	}
@@ -404,11 +404,11 @@ where
 		let mut r = self.resolver.lock().await;
 		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
-	fn start(&self) -> u32
+	fn start(&self) -> u64
 	{
 		self.start
 	}
-	fn end(&self) -> u32
+	fn end(&self) -> u64
 	{
 		self.end
 	}
@@ -441,11 +441,11 @@ where
 		let mut r = self.resolver.lock().await;
 		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
-	fn start(&self) -> u32
+	fn start(&self) -> u64
 	{
 		self.start
 	}
-	fn end(&self) -> u32
+	fn end(&self) -> u64
 	{
 		self.end
 	}
@@ -461,11 +461,11 @@ where
 	{
 		Some(&self.fields.strand)
 	}
-	fn thick_start(&self) -> Option<u32>
+	fn thick_start(&self) -> Option<u64>
 	{
 		Some(self.fields.thick_start)
 	}
-	fn thick_end(&self) -> Option<u32>
+	fn thick_end(&self) -> Option<u64>
 	{
 		Some(self.fields.thick_end)
 	}
@@ -502,11 +502,11 @@ where
 		let mut r = self.resolver.lock().await;
 		r.from_symbol_id(&self.tid).map(|s| s.to_string())
 	}
-	fn start(&self) -> u32
+	fn start(&self) -> u64
 	{
 		self.start
 	}
-	fn end(&self) -> u32
+	fn end(&self) -> u64
 	{
 		self.end
 	}
@@ -522,11 +522,11 @@ where
 	{
 		Some(&self.fields.strand)
 	}
-	fn thick_start(&self) -> Option<u32>
+	fn thick_start(&self) -> Option<u64>
 	{
 		Some(self.fields.thick_start)
 	}
-	fn thick_end(&self) -> Option<u32>
+	fn thick_end(&self) -> Option<u64>
 	{
 		Some(self.fields.thick_end)
 	}

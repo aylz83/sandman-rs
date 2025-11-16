@@ -18,8 +18,8 @@ where
 {
 	pub(crate) resolver: Arc<Mutex<Resolver>>,
 	pub tid: Tid,
-	pub start: u32,
-	pub end: u32,
+	pub start: u64,
+	pub end: u64,
 	pub fields: F,
 }
 
@@ -48,8 +48,8 @@ where
 	pub fn new(
 		resolver: Arc<Mutex<Resolver>>,
 		tid: Tid,
-		start: u32,
-		end: u32,
+		start: u64,
+		end: u64,
 	) -> BedRecord<Resolver, Tid, Bed3Fields>
 	{
 		Self {

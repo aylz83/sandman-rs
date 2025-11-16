@@ -83,6 +83,22 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String>
 	.parse(input)
 }
 
+fn parse_u64(input: &[u8]) -> IResult<&[u8], u64>
+{
+	map_res(take_while1(|c: u8| c.is_ascii_digit()), |bytes: &[u8]| {
+		let mut val: u64 = 0;
+		for &b in bytes
+		{
+			val = val
+				.checked_mul(10)
+				.and_then(|v| v.checked_add((b - b'0') as u64))
+				.ok_or("overflow")?;
+		}
+		Ok::<u64, &str>(val)
+	})
+	.parse(input)
+}
+
 fn parse_u32(input: &[u8]) -> IResult<&[u8], u32>
 {
 	map_res(take_while1(|c: u8| c.is_ascii_digit()), |bytes: &[u8]| {
@@ -155,9 +171,9 @@ pub(crate) async fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std
 	let (input, (tid, _, start, _, end, _)) = (
 		parse_string,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		line_ending,
 	)
 		.parse(input)?;
@@ -178,9 +194,9 @@ pub(crate) async fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std
 	let (input, (tid, _, start, _, end, _, name, _)) = (
 		parse_string,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 		line_ending,
@@ -205,9 +221,9 @@ pub(crate) async fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std
 	let (input, (tid, _, start, _, end, _, name, _, score, _)) = (
 		parse_string,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 		multispace1,
@@ -234,9 +250,9 @@ pub(crate) async fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand, _)) = (
 		parse_string,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 		multispace1,
@@ -266,9 +282,9 @@ pub(crate) async fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + st
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
 		parse_string,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 		multispace1,
@@ -297,9 +313,9 @@ pub(crate) async fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + st
 		),
 	) = (
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 		multispace1,
@@ -357,9 +373,9 @@ pub(crate) async fn parse_bedmethyl_record<'a, R: TidResolver>(
 	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
 		parse_string,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 		multispace1,
@@ -371,9 +387,9 @@ pub(crate) async fn parse_bedmethyl_record<'a, R: TidResolver>(
 
 	let (input, (_, thick_start, _, thick_end, _, item_rgb)) = (
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
-		parse_u32,
+		parse_u64,
 		multispace1,
 		parse_string,
 	)

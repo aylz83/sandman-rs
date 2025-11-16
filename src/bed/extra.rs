@@ -31,8 +31,8 @@ pub struct Bed12Extra
 	pub name: String,
 	pub score: Option<u32>,
 	pub strand: Strand,
-	pub thick_start: u32,
-	pub thick_end: u32,
+	pub thick_start: u64,
+	pub thick_end: u64,
 	pub item_rgb: Option<String>,
 	pub block_count: u32,
 	pub block_sizes: Vec<u32>,
@@ -45,8 +45,8 @@ pub struct BedMethylExtra
 	pub name: String,
 	pub score: Option<u32>,
 	pub strand: Strand,
-	pub thick_start: u32,
-	pub thick_end: u32,
+	pub thick_start: u64,
+	pub thick_end: u64,
 	pub item_rgb: Option<String>,
 	pub n_valid_cov: u32,
 	pub frac_mod: f32,
@@ -107,8 +107,8 @@ where
 {
 	pub fn with_bed12(
 		self,
-		thick_start: u32,
-		thick_end: u32,
+		thick_start: u64,
+		thick_end: u64,
 		item_rgb: Option<String>,
 		block_count: u32,
 		block_sizes: Vec<u32>,
@@ -136,8 +136,8 @@ where
 
 	pub fn with_bedmethyl(
 		self,
-		thick_start: u32,
-		thick_end: u32,
+		thick_start: u64,
+		thick_end: u64,
 		item_rgb: Option<String>,
 		n_valid_cov: u32,
 		frac_mod: f32,

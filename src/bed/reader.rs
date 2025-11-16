@@ -783,8 +783,8 @@ where
 	pub async fn read_lines_in_tid_region(
 		&mut self,
 		tid: &str,
-		start: u32,
-		end: u32,
+		start: u64,
+		end: u64,
 	) -> error::Result<Option<Vec<Record<T::Tid>>>>
 	{
 		if matches!(self.reader, FileKind::Plain(_))

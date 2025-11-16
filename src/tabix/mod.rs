@@ -36,7 +36,7 @@ pub struct Region
 #[derive(Debug)]
 pub struct Reference
 {
-	pub bins: HashMap<u32, Region>,
+	pub bins: HashMap<u64, Region>,
 }
 
 #[derive(Debug)]
@@ -95,8 +95,8 @@ impl Reader
 	pub fn offsets_for_tid_region(
 		&self,
 		tid: &str,
-		start: u32,
-		end: u32,
+		start: u64,
+		end: u64,
 	) -> error::Result<Option<Vec<Range<u64>>>>
 	{
 		let Some(idx) = self.seqnames.iter().position(|s| s == tid)
@@ -120,10 +120,10 @@ impl Reader
 		Ok(Some(chunks))
 	}
 
-	fn region_bins(start: u32, end: u32) -> Vec<u32>
+	fn region_bins(start: u64, end: u64) -> Vec<u64>
 	{
-		const MAX_POS: u32 = 1 << 29; // maximum coordinate (512 Mb)
-		const BIN_OFFSETS: [u32; 6] = [0, 1, 9, 73, 585, 4681];
+		const MAX_POS: u64 = 1 << 29; // maximum coordinate (512 Mb)
+		const BIN_OFFSETS: [u64; 6] = [0, 1, 9, 73, 585, 4681];
 
 		let mut bins = Vec::new();
 
@@ -234,7 +234,7 @@ impl Reader
 
 			for _ in 0..n_bin
 			{
-				let bin = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
+				let bin = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)? as u64;
 				let n_chunk = ReadBytesExt::read_i32::<LittleEndian>(&mut cursor)?;
 
 				let mut chunks = Vec::with_capacity(n_chunk as usize);
