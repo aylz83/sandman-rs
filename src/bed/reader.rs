@@ -256,6 +256,15 @@ where
 		let (format, reader, tbi_reader) =
 			Self::open_bed_readers(&name, reader, tbi_reader).await?;
 
+		let resolver = Arc::new(Mutex::new(TidStore::default()));
+		if let Some(tbi) = &tbi_reader
+		{
+			for tid in &tbi.seqnames
+			{
+				resolver.lock().await.to_symbol_id(&tid);
+			}
+		}
+
 		Ok(Reader {
 			name,
 			reader,
@@ -265,7 +274,7 @@ where
 			track_line: None,
 			last_browser: None,
 			reset_browser: true,
-			resolver: Arc::new(Mutex::new(TidStore::default())),
+			resolver,
 		})
 	}
 
@@ -278,6 +287,14 @@ where
 	{
 		let (format, reader, tbi_reader) =
 			Self::open_bed_readers(&name, reader, tbi_reader).await?;
+
+		if let Some(tbi) = &tbi_reader
+		{
+			for tid in &tbi.seqnames
+			{
+				resolver.lock().await.to_symbol_id(&tid);
+			}
+		}
 
 		Ok(Reader {
 			name,
