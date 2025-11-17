@@ -44,7 +44,7 @@ pub struct Reader
 {
 	pub header: Header,
 
-	pub seqnames: BTreeSet<String>,
+	pub seqnames: Vec<String>,
 	pub ref_indices: Vec<Reference>,
 }
 
@@ -176,7 +176,7 @@ impl Reader
 
 	async fn read_tabix<R>(
 		reader: &mut TokioBufReader<R>,
-	) -> error::Result<(Header, BTreeSet<String>, Vec<Reference>)>
+	) -> error::Result<(Header, Vec<String>, Vec<Reference>)>
 	where
 		R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 	{
@@ -222,7 +222,7 @@ impl Reader
 			.split("\0")
 			.filter(|seqname| seqname != &"")
 			.map(|seqname| String::from_str(seqname).unwrap())
-			.collect::<BTreeSet<_>>();
+			.collect::<Vec<_>>();
 
 		let mut ref_indices = Vec::with_capacity(n_ref as usize);
 

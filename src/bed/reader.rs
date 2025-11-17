@@ -825,7 +825,11 @@ where
 				{
 					Some(mut records) =>
 					{
-						let tid_id: T::Tid = resolver.lock().await.to_symbol_id(tid);
+						let tid_id: T::Tid = resolver
+							.lock()
+							.await
+							.find(tid)
+							.ok_or(error::Error::BedFormat(self.name.clone()))?;
 
 						records.retain(|rec| {
 							*rec.tid() == tid_id && rec.start() < end && rec.end() > start

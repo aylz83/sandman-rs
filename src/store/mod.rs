@@ -14,6 +14,7 @@ pub type DefaultTid = String;
 pub trait TidResolver
 {
 	type Tid: Clone + Debug + Send + Sync + PartialEq;
+	fn find(&self, input: &str) -> Option<Self::Tid>;
 	fn to_symbol_id(&mut self, input: &str) -> Self::Tid;
 	fn from_symbol_id<'a>(&'a mut self, input: &'a Self::Tid) -> Option<&'a str>;
 }
@@ -22,6 +23,12 @@ pub trait TidResolver
 impl TidResolver for ()
 {
 	type Tid = String;
+
+	fn find(&self, input: &str) -> Option<Self::Tid>
+	{
+		input.to_owned()
+	}
+
 	fn to_symbol_id(&mut self, input: &str) -> Self::Tid
 	{
 		input.to_owned()
@@ -37,6 +44,11 @@ impl TidResolver for ()
 impl TidResolver for TidStore
 {
 	type Tid = string_interner::DefaultSymbol;
+
+	fn find(&self, input: &str) -> Option<Self::Tid>
+	{
+		self.find(input)
+	}
 
 	fn to_symbol_id(&mut self, input: &str) -> Self::Tid
 	{
