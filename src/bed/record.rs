@@ -1,5 +1,6 @@
-use crate::bed::extra::Bed4Extra;
 use crate::store::TidResolver;
+use crate::bed::IntoAnyBedRecord;
+use crate::bed::AnyBedRecord;
 
 use std::fmt;
 use std::sync::Arc;
@@ -40,9 +41,38 @@ where
 	}
 }
 
+impl<Resolver, Tid, F> BedRecord<Resolver, Tid, F>
+where
+	Resolver: TidResolver<Tid = Tid>,
+	Tid: Debug + Clone,
+{
+	pub async fn pretty_tid(&mut self) -> Option<String>
+	{
+		let mut r = self.resolver.lock().await;
+		r.from_symbol_id(&self.tid).map(|s| s.to_string())
+	}
+
+	pub fn new_with_extra(
+		resolver: Arc<Mutex<Resolver>>,
+		tid: Tid,
+		start: u64,
+		end: u64,
+		extra: F,
+	) -> BedRecord<Resolver, Tid, F>
+	{
+		Self {
+			resolver,
+			tid: tid,
+			start,
+			end,
+			fields: extra,
+		}
+	}
+}
+
 impl<Resolver, Tid> BedRecord<Resolver, Tid, Bed3Fields>
 where
-	Resolver: TidResolver,
+	Resolver: TidResolver<Tid = Tid>,
 	Tid: Debug + Clone,
 {
 	pub fn new(
@@ -60,15 +90,14 @@ where
 			fields: Bed3Fields,
 		}
 	}
+}
 
-	pub fn with_name(self, name: impl Into<String>) -> BedRecord<Resolver, Tid, Bed4Extra>
+impl<T> IntoAnyBedRecord<T> for BedRecord<T, T::Tid, Bed3Fields>
+where
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
+{
+	fn into_any(self) -> AnyBedRecord<T>
 	{
-		BedRecord {
-			resolver: self.resolver,
-			tid: self.tid,
-			start: self.start,
-			end: self.end,
-			fields: Bed4Extra { name: name.into() },
-		}
+		AnyBedRecord::Bed3(self)
 	}
 }

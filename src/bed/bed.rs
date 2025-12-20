@@ -1,102 +1,112 @@
 use std::fmt::{Debug, Display};
 use std::collections::HashMap;
+use std::fmt;
+// use std::sync::Arc;
+// use tokio::sync::Mutex;
 
 pub use crate::bed::record::*;
 pub use crate::bed::extra::*;
+pub use crate::bed::parser::*;
 use crate::store::TidResolver;
+
+use crate::error;
 
 use async_trait::async_trait;
 
-#[macro_export]
-macro_rules! record {
-    // BED3
-    ($chr:expr, $start:expr, $end:expr) => {{
-        Box::new(
-            $crate::bed::BedRecord::new($chr, $start, $end)
-        ) as Box<dyn $crate::bed::BedLine<_>>
-    }};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BedKind
+{
+	Bed3,
+	Bed4,
+	Bed5,
+	Bed6,
+	Bed12,
+	BedMethyl,
+}
 
-    // BED4
-    ($chr:expr, $start:expr, $end:expr, $name:expr) => {{
-        Box::new(
-            $crate::bed::BedRecord::new($chr, $start, $end)
-                .with_name($name)
-        ) as Box<dyn $crate::bed::BedLine<_>>
-    }};
+impl fmt::Display for BedKind
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	{
+		let s = match self
+		{
+			BedKind::Bed3 => "BED3",
+			BedKind::Bed4 => "BED4",
+			BedKind::Bed5 => "BED5",
+			BedKind::Bed6 => "BED6",
+			BedKind::Bed12 => "BED12",
+			BedKind::BedMethyl => "BEDMethyl",
+		};
+		f.write_str(s)
+	}
+}
 
-    // BED5
-    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr) => {{
-        Box::new(
-            $crate::bed::BedRecord::new($chr, $start, $end)
-                .with_name($name)
-                .with_score(Some($score))
-        ) as Box<dyn $crate::bed::BedLine<_>>
-    }};
+#[derive(Debug, Clone, PartialEq)]
+pub struct BedFormat
+{
+	pub kind: BedKind,
+	pub has_tracks: bool,
+	pub has_browsers: bool,
+}
 
-    // BED6
-    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr, $strand:expr) => {{
-        Box::new(
-            $crate::bed::BedRecord::new($chr, $start, $end)
-                .with_name($name)
-                .with_score(Some($score))
-                .with_strand($strand.into())
-        ) as Box<dyn $crate::bed::BedLine<_>>
-    }};
+impl TryFrom<&Vec<String>> for BedFormat
+{
+	type Error = error::Error;
 
-    // BED12
-    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr, $strand:expr,
-        $thick_start:expr, $thick_end:expr, $item_rgb:expr, $block_count:expr,
-        $block_sizes:expr, $block_starts:expr) => {{
-        Box::new(
-            $crate::bed::BedRecord::new($chr, $start, $end)
-                .with_name($name)
-                .with_score(Some($score))
-                .with_strand($strand.into())
-                .with_bed12(
-                    $thick_start,
-                    $thick_end,
-                    Some($item_rgb),
-                    $block_count,
-                    $block_sizes,
-                    $block_starts,
-                )
-        ) as Box<dyn $crate::bed::BedLine<_>>
-    }};
+	fn try_from(bed_lines: &Vec<String>) -> error::Result<Self>
+	{
+		let mut has_tracks = false;
+		let mut has_browsers = false;
 
-    // BEDMethyl
-    ($chr:expr, $start:expr, $end:expr, $name:expr, $score:expr, $strand:expr,
-        $thick_start:expr, $thick_end:expr, $item_rgb:expr, $n_valid_cov:expr,
-        $frac_mod:expr, $n_mod:expr, $n_canonical:expr, $n_other_mod:expr,
-        $n_delete:expr, $n_fail:expr, $n_diff:expr, $n_nocall:expr) => {{
-        Box::new(
-            $crate::bed::BedRecord::new($chr, $start, $end)
-                .with_name($name)
-                .with_score(Some($score))
-                .with_strand($strand.into())
-                .with_bedmethyl(
-                    $thick_start,
-                    $thick_end,
-                    Some($item_rgb),
-                    $n_valid_cov,
-                    $frac_mod,
-                    $n_mod
-                    $n_canonical,
-                    $n_other_mod,
-                    $n_delete,
-                    $n_fail,
-                    $n_diff,
-                    $n_nocall,
-                )
-        ) as Box<dyn $crate::bed::BedLine<_>>
-    }};
+		for line in bed_lines
+		{
+			let trimmed = line.trim();
+
+			if trimmed.is_empty()
+			{
+				continue;
+			}
+			else if trimmed.starts_with("track")
+			{
+				has_tracks = true;
+				continue;
+			}
+			else if trimmed.starts_with("browser")
+			{
+				has_browsers = true;
+				continue;
+			}
+
+			let count = trimmed.split_whitespace().count();
+			let kind = match count
+			{
+				3 => BedKind::Bed3,
+				4 => BedKind::Bed4,
+				5 => BedKind::Bed5,
+				6 => BedKind::Bed6,
+				12 => BedKind::Bed12,
+				18 => BedKind::BedMethyl,
+				_ => return Err(error::Error::Parse(trimmed.to_string())),
+			};
+
+			return Ok(BedFormat {
+				kind,
+				has_tracks,
+				has_browsers,
+			});
+		}
+
+		Err(error::Error::AutoDetect)
+	}
 }
 
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[derive(PartialOrd, Ord, Eq, Hash, PartialEq, Debug, Clone)]
+#[derive(PartialOrd, Ord, Eq, Hash, PartialEq, Debug, Clone, Copy, Default)]
 pub enum Strand
 {
 	Plus,
 	Minus,
+	#[default]
 	Both,
 }
 
@@ -170,13 +180,32 @@ impl BrowserMeta
 	}
 }
 
-#[async_trait]
-pub trait BedLine<Tid>: Debug + BedLineClone<Tid> + Send + Sync
+#[derive(Clone, Debug)]
+pub enum AnyBedRecord<T>
 where
-	Tid: Debug + Clone + Send + Sync + PartialEq,
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 {
-	fn tid(&self) -> &Tid;
+	Bed3(BedRecord<T, T::Tid, Bed3Fields>),
+	Bed4(BedRecord<T, T::Tid, Bed4Extra>),
+	Bed5(BedRecord<T, T::Tid, Bed5Extra>),
+	Bed6(BedRecord<T, T::Tid, Bed6Extra>),
+	Bed12(BedRecord<T, T::Tid, Bed12Extra>),
+	BedMethyl(BedRecord<T, T::Tid, BedMethylExtra>),
+}
 
+pub trait IntoAnyBedRecord<T>
+where
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
+{
+	fn into_any(self) -> AnyBedRecord<T>;
+}
+
+#[async_trait]
+pub trait AutoBedRecord<T>: Debug + Clone + Send + Sync
+where
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
+{
+	fn tid(&self) -> &T::Tid;
 	async fn pretty_tid(&self) -> Option<String>;
 
 	fn start(&self) -> u64;
@@ -272,305 +301,222 @@ where
 			"n_fail" => self.n_fail().map(|n_fail| n_fail as f32),
 			"n_diff" => self.n_diff().map(|n_diff| n_diff as f32),
 			"n_nocall" => self.n_nocall().map(|n_nocall| n_nocall as f32),
-			// add more as needed
 			_ => None,
 		}
 	}
 }
 
-pub trait BedLineClone<Tid>
-{
-	fn clone_box(&self) -> Box<dyn BedLine<Tid>>;
-}
-
-impl<T, Tid> BedLineClone<Tid> for T
-where
-	T: 'static + BedLine<Tid> + Clone,
-	Tid: Debug + Clone + Send + Sync + PartialEq,
-{
-	fn clone_box(&self) -> Box<dyn BedLine<Tid>>
-	{
-		Box::new(self.clone())
-	}
-}
-
-impl<Tid> Clone for Box<dyn BedLine<Tid>>
-{
-	fn clone(&self) -> Box<dyn BedLine<Tid>>
-	{
-		self.clone_box()
-	}
-}
-
 #[async_trait]
-impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed3Fields>
+impl<T> AutoBedRecord<T> for AnyBedRecord<T>
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
+	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 {
-	fn tid(&self) -> &Tid
+	fn tid(&self) -> &T::Tid
 	{
-		&self.tid
+		match self
+		{
+			Self::Bed3(r) => &r.tid,
+			Self::Bed4(r) => &r.tid,
+			Self::Bed5(r) => &r.tid,
+			Self::Bed6(r) => &r.tid,
+			Self::Bed12(r) => &r.tid,
+			Self::BedMethyl(r) => &r.tid,
+		}
 	}
 	async fn pretty_tid(&self) -> Option<String>
 	{
-		let mut r = self.resolver.lock().await;
-		r.from_symbol_id(&self.tid).map(|s| s.to_string())
-	}
-	fn start(&self) -> u64
-	{
-		self.start
-	}
-	fn end(&self) -> u64
-	{
-		self.end
-	}
-}
+		let mut r = match self
+		{
+			Self::Bed3(r) => r.resolver.lock().await,
+			Self::Bed4(r) => r.resolver.lock().await,
+			Self::Bed5(r) => r.resolver.lock().await,
+			Self::Bed6(r) => r.resolver.lock().await,
+			Self::Bed12(r) => r.resolver.lock().await,
+			Self::BedMethyl(r) => r.resolver.lock().await,
+		};
 
-#[async_trait]
-impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed4Extra>
-where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
-{
-	fn tid(&self) -> &Tid
-	{
-		&self.tid
-	}
-	async fn pretty_tid(&self) -> Option<String>
-	{
-		let mut r = self.resolver.lock().await;
-		r.from_symbol_id(&self.tid).map(|s| s.to_string())
+		r.from_symbol_id(&self.tid()).map(|s| s.to_string())
 	}
 	fn start(&self) -> u64
 	{
-		self.start
+		match self
+		{
+			Self::Bed3(r) => r.start,
+			Self::Bed4(r) => r.start,
+			Self::Bed5(r) => r.start,
+			Self::Bed6(r) => r.start,
+			Self::Bed12(r) => r.start,
+			Self::BedMethyl(r) => r.start,
+		}
 	}
 	fn end(&self) -> u64
 	{
-		self.end
+		match self
+		{
+			Self::Bed3(r) => r.end,
+			Self::Bed4(r) => r.end,
+			Self::Bed5(r) => r.end,
+			Self::Bed6(r) => r.end,
+			Self::Bed12(r) => r.end,
+			Self::BedMethyl(r) => r.end,
+		}
 	}
+
 	fn name(&self) -> Option<&str>
 	{
-		Some(&self.fields.name)
+		match self
+		{
+			Self::Bed4(r) => Some(&r.fields.name),
+			Self::Bed5(r) => Some(&r.fields.name),
+			Self::Bed6(r) => Some(&r.fields.name),
+			Self::Bed12(r) => Some(&r.fields.name),
+			Self::BedMethyl(r) => Some(&r.fields.name),
+			_ => None,
+		}
 	}
-}
 
-#[async_trait]
-impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed5Extra>
-where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
-{
-	fn tid(&self) -> &Tid
-	{
-		&self.tid
-	}
-	async fn pretty_tid(&self) -> Option<String>
-	{
-		let mut r = self.resolver.lock().await;
-		r.from_symbol_id(&self.tid).map(|s| s.to_string())
-	}
-	fn start(&self) -> u64
-	{
-		self.start
-	}
-	fn end(&self) -> u64
-	{
-		self.end
-	}
-	fn name(&self) -> Option<&str>
-	{
-		Some(&self.fields.name)
-	}
 	fn score(&self) -> Option<u32>
 	{
-		self.fields.score
+		match self
+		{
+			Self::Bed5(r) => r.fields.score,
+			Self::Bed6(r) => r.fields.score,
+			Self::Bed12(r) => r.fields.score,
+			Self::BedMethyl(r) => r.fields.score,
+			_ => None,
+		}
 	}
-}
 
-#[async_trait]
-impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed6Extra>
-where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
-{
-	fn tid(&self) -> &Tid
-	{
-		&self.tid
-	}
-	async fn pretty_tid(&self) -> Option<String>
-	{
-		let mut r = self.resolver.lock().await;
-		r.from_symbol_id(&self.tid).map(|s| s.to_string())
-	}
-	fn start(&self) -> u64
-	{
-		self.start
-	}
-	fn end(&self) -> u64
-	{
-		self.end
-	}
-	fn name(&self) -> Option<&str>
-	{
-		Some(&self.fields.name)
-	}
-	fn score(&self) -> Option<u32>
-	{
-		self.fields.score
-	}
 	fn strand(&self) -> Option<&Strand>
 	{
-		Some(&self.fields.strand)
+		match self
+		{
+			Self::Bed6(r) => Some(&r.fields.strand),
+			Self::Bed12(r) => Some(&r.fields.strand),
+			Self::BedMethyl(r) => Some(&r.fields.strand),
+			_ => None,
+		}
 	}
-}
 
-#[async_trait]
-impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, Bed12Extra>
-where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
-{
-	fn tid(&self) -> &Tid
-	{
-		&self.tid
-	}
-	async fn pretty_tid(&self) -> Option<String>
-	{
-		let mut r = self.resolver.lock().await;
-		r.from_symbol_id(&self.tid).map(|s| s.to_string())
-	}
-	fn start(&self) -> u64
-	{
-		self.start
-	}
-	fn end(&self) -> u64
-	{
-		self.end
-	}
-	fn name(&self) -> Option<&str>
-	{
-		Some(&self.fields.name)
-	}
-	fn score(&self) -> Option<u32>
-	{
-		self.fields.score
-	}
-	fn strand(&self) -> Option<&Strand>
-	{
-		Some(&self.fields.strand)
-	}
 	fn thick_start(&self) -> Option<u64>
 	{
-		Some(self.fields.thick_start)
+		match self
+		{
+			Self::Bed12(r) => Some(r.fields.thick_start),
+			_ => None,
+		}
 	}
 	fn thick_end(&self) -> Option<u64>
 	{
-		Some(self.fields.thick_end)
+		match self
+		{
+			Self::Bed12(r) => Some(r.fields.thick_end),
+			_ => None,
+		}
 	}
 	fn item_rgb(&self) -> &Option<String>
 	{
-		&self.fields.item_rgb
+		match self
+		{
+			Self::Bed12(r) => &r.fields.item_rgb,
+			_ => &None,
+		}
 	}
 	fn block_count(&self) -> Option<u32>
 	{
-		Some(self.fields.block_count)
+		match self
+		{
+			Self::Bed12(r) => Some(r.fields.block_count),
+			_ => None,
+		}
 	}
 	fn block_sizes(&self) -> Option<&Vec<u32>>
 	{
-		Some(&self.fields.block_sizes)
+		match self
+		{
+			Self::Bed12(r) => Some(&r.fields.block_sizes),
+			_ => None,
+		}
 	}
 	fn block_starts(&self) -> Option<&Vec<u32>>
 	{
-		Some(&self.fields.block_starts)
-	}
-}
-
-#[async_trait]
-impl<Resolver, Tid> BedLine<Tid> for BedRecord<Resolver, Tid, BedMethylExtra>
-where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
-{
-	fn tid(&self) -> &Tid
-	{
-		&self.tid
-	}
-	async fn pretty_tid(&self) -> Option<String>
-	{
-		let mut r = self.resolver.lock().await;
-		r.from_symbol_id(&self.tid).map(|s| s.to_string())
-	}
-	fn start(&self) -> u64
-	{
-		self.start
-	}
-	fn end(&self) -> u64
-	{
-		self.end
-	}
-	fn name(&self) -> Option<&str>
-	{
-		Some(&self.fields.name)
-	}
-	fn score(&self) -> Option<u32>
-	{
-		self.fields.score
-	}
-	fn strand(&self) -> Option<&Strand>
-	{
-		Some(&self.fields.strand)
-	}
-	fn thick_start(&self) -> Option<u64>
-	{
-		Some(self.fields.thick_start)
-	}
-	fn thick_end(&self) -> Option<u64>
-	{
-		Some(self.fields.thick_end)
-	}
-	fn item_rgb(&self) -> &Option<String>
-	{
-		&self.fields.item_rgb
+		match self
+		{
+			Self::Bed12(r) => Some(&r.fields.block_starts),
+			_ => None,
+		}
 	}
 
 	fn n_valid_cov(&self) -> Option<u32>
 	{
-		Some(self.fields.n_valid_cov)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_valid_cov),
+			_ => None,
+		}
 	}
 	fn frac_mod(&self) -> Option<f32>
 	{
-		Some(self.fields.frac_mod)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.frac_mod),
+			_ => None,
+		}
 	}
 	fn n_mod(&self) -> Option<u32>
 	{
-		Some(self.fields.n_mod)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_mod),
+			_ => None,
+		}
 	}
 	fn n_canonical(&self) -> Option<u32>
 	{
-		Some(self.fields.n_canonical)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_canonical),
+			_ => None,
+		}
 	}
 	fn n_other_mod(&self) -> Option<u32>
 	{
-		Some(self.fields.n_other_mod)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_other_mod),
+			_ => None,
+		}
 	}
 	fn n_delete(&self) -> Option<u32>
 	{
-		Some(self.fields.n_delete)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_delete),
+			_ => None,
+		}
 	}
 	fn n_fail(&self) -> Option<u32>
 	{
-		Some(self.fields.n_fail)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_fail),
+			_ => None,
+		}
 	}
 	fn n_diff(&self) -> Option<u32>
 	{
-		Some(self.fields.n_diff)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_diff),
+			_ => None,
+		}
 	}
 	fn n_nocall(&self) -> Option<u32>
 	{
-		Some(self.fields.n_nocall)
+		match self
+		{
+			Self::BedMethyl(r) => Some(r.fields.n_nocall),
+			_ => None,
+		}
 	}
 }
-
-pub type Record<Tid> = Box<dyn BedLine<Tid>>;

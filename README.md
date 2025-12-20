@@ -12,9 +12,13 @@ A Rust crate for asynchronous reading of bed, bgzipped bed, and tabix indexed be
 ## Example usage -
 
 ```rust
-// "my_bed.gz.tbi" will be opened if exists, or this can be supplied by
+// "my_bed.bed.gz.tbi" will be opened if exists, or this can be supplied by
 // changing None to a path if the tbi is under a different name/location
-let mut reader = sandman::bed::Reader::from_path("my_bed.gz", None).await?;
+// requires known Bed3, 4, 5, 6, 12 or Methyl format at compile time
+let mut reader = sandman::bed::Reader::<_, _, Bed3Fields>::from_path("my_bed.bed.gz", None).await?;
+
+// Alternatively, dynamic determination of bed formats can be handled at runtime with
+let mut reader = sandman::bed::autoreader::from_path("my_bed.bed.gz", None).await?;
 
 while let Some((track, line)) = reader.read_line().await?
 {
@@ -23,9 +27,10 @@ while let Some((track, line)) = reader.read_line().await?
 }
 
 // To read specific regions
-let regions = reader.read_lines_in_tid("chr3").await?;
+let mut regions = Vec::new();
+reader.read_lines_in_tid("chr3", &mut regions).await?;
 // or
-let regions = reader.read_lines_in_tid_in_region("chr3", 1000, 5000).await?;
+reader.read_lines_in_tid_in_region("chr3", 1000, 5000, &mut regions).await?;
 
 // To obtain browser lines if required ...
 let mut browser_meta: Option<sandman::bed::BrowserMeta> = None;
@@ -34,7 +39,7 @@ let mut reader = reader.read_line_with_meta(&mut browser_meta).await?
 
 ## TODO -
 
- - Documentation
- - bigBed?
- - Custom bed column formats?
- - Don't allocate Record on heap on every read_line
+- [ ] Documentation
+- [ ] bigBed?
+- [ ] Custom bed column formats?
+- [x] Don't allocate Record on heap on every read_line

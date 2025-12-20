@@ -7,8 +7,6 @@ use std::ops::Range;
 use tokio::fs::File as TokioFile;
 use tokio::io::{BufReader as TokioBufReader};
 
-use indexset::BTreeSet;
-
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use pufferfish::BGZ;

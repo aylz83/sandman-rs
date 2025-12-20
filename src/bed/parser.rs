@@ -7,13 +7,18 @@ use nom::bytes::complete::{is_not, take_while1, take_till1, tag};
 use nom::combinator::{map_res, opt};
 use nom::multi::many0;
 
+use tokio::io::{AsyncBufRead, AsyncBufReadExt};
+
 use tokio::sync::Mutex;
 
 use std::sync::Arc;
 use std::fmt::Debug;
 use std::collections::HashMap;
 
-use crate::bed::BedLine;
+use crate::AsyncReadSeek;
+use crate::bed::BedFormat;
+use crate::bed::BedKind;
+// use crate::bed::BedLine;
 use crate::bed::BrowserMeta;
 use crate::bed::Track;
 use crate::bed::Strand;
@@ -26,6 +31,269 @@ use crate::bed::Bed12Extra;
 use crate::bed::BedMethylExtra;
 use crate::store::TidResolver;
 use crate::error;
+
+#[async_trait::async_trait]
+pub trait BedFields<Resolver, Tid>: Send + Sync
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	where
+		Self: Sized;
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	where
+		Self: Sized;
+}
+
+#[async_trait::async_trait]
+impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed3Fields
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind = BedKind::Bed3;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	{
+		let (rest, parsed) = parse_bed3_record(resolver.clone(), input)
+			.await
+			.map_err(|_| error::Error::BedMismatch("BED3".into()))?;
+
+		*record = parsed;
+		Ok(rest)
+	}
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	{
+		let mut r = resolver.lock().await;
+		BedRecord {
+			resolver: resolver.clone(),
+			tid: r.dummy_tid(),
+			start: 0,
+			end: 0,
+			fields: Bed3Fields,
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed4Extra
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind = BedKind::Bed4;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	{
+		let (rest, parsed) = parse_bed4_record(resolver.clone(), input)
+			.await
+			.map_err(|_| error::Error::BedMismatch("BED4".into()))?;
+
+		*record = parsed;
+		Ok(rest)
+	}
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	{
+		let mut r = resolver.lock().await;
+		BedRecord {
+			resolver: resolver.clone(),
+			tid: r.dummy_tid(),
+			start: 0,
+			end: 0,
+			fields: Bed4Extra::default(),
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed5Extra
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind = BedKind::Bed5;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	{
+		let (rest, parsed) = parse_bed5_record(resolver.clone(), input)
+			.await
+			.map_err(|_| error::Error::BedMismatch("BED5".into()))?;
+
+		*record = parsed;
+		Ok(rest)
+	}
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	{
+		let mut r = resolver.lock().await;
+		BedRecord {
+			resolver: resolver.clone(),
+			tid: r.dummy_tid(),
+			start: 0,
+			end: 0,
+			fields: Bed5Extra::default(),
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed6Extra
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind = BedKind::Bed6;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	{
+		let (rest, parsed) = parse_bed6_record(resolver.clone(), input)
+			.await
+			.map_err(|_| error::Error::BedMismatch("BED6".into()))?;
+
+		*record = parsed;
+		Ok(rest)
+	}
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	{
+		let mut r = resolver.lock().await;
+		BedRecord {
+			resolver: resolver.clone(),
+			tid: r.dummy_tid(),
+			start: 0,
+			end: 0,
+			fields: Bed6Extra::default(),
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed12Extra
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind = BedKind::Bed12;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	{
+		let (rest, parsed) = parse_bed12_record(resolver.clone(), input)
+			.await
+			.map_err(|_| error::Error::BedMismatch("BED12".into()))?;
+
+		*record = parsed;
+		Ok(rest)
+	}
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	{
+		let mut r = resolver.lock().await;
+		BedRecord {
+			resolver: resolver.clone(),
+			tid: r.dummy_tid(),
+			start: 0,
+			end: 0,
+			fields: Bed12Extra::default(),
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl<Resolver, Tid> BedFields<Resolver, Tid> for BedMethylExtra
+where
+	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
+	Tid: Debug + Clone + Send + Sync + PartialEq,
+{
+	const KIND: BedKind = BedKind::BedMethyl;
+
+	async fn parse_into<'a>(
+		resolver: Arc<Mutex<Resolver>>,
+		input: &'a [u8],
+		record: &mut BedRecord<Resolver, Tid, Self>,
+	) -> error::Result<&'a [u8]>
+	{
+		let (rest, parsed) = parse_bedmethyl_record(resolver.clone(), input)
+			.await
+			.map_err(|_| error::Error::BedMismatch("BEDMethyl".into()))?;
+
+		*record = parsed;
+		Ok(rest)
+	}
+
+	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+	{
+		let mut r = resolver.lock().await;
+		BedRecord {
+			resolver: resolver.clone(),
+			tid: r.dummy_tid(),
+			start: 0,
+			end: 0,
+			fields: BedMethylExtra::default(),
+		}
+	}
+}
+
+pub(crate) async fn detect_format_from_reader<B: AsyncReadSeek + Send + Unpin + AsyncBufRead>(
+	name: String,
+	reader: &mut B,
+	max_lines: usize,
+) -> error::Result<BedFormat>
+{
+	let mut accumulated = Vec::new();
+	let mut line = String::new();
+
+	for _ in 0..max_lines
+	{
+		line.clear();
+		let bytes_read = reader
+			.read_line(&mut line)
+			.await
+			.map_err(|_| error::Error::BedFormat(name.clone()))?;
+		if bytes_read == 0
+		{
+			break; // EOF
+		}
+
+		accumulated.push(line.clone());
+
+		if let Ok(format) = BedFormat::try_from(&accumulated)
+		{
+			return Ok(format);
+		}
+	}
+
+	Err(error::Error::BedFormat(name))
+}
 
 fn is_key_char(c: char) -> bool
 {
@@ -115,14 +383,6 @@ fn parse_u32(input: &[u8]) -> IResult<&[u8], u32>
 	.parse(input)
 }
 
-// fn parse_u32(input: &[u8]) -> IResult<&[u8], u32>
-// {
-// 	map_res(digit1, |s: &[u8]| {
-// 		std::str::from_utf8(s).unwrap_or("0").parse::<u32>()
-// 	})
-// 	.parse(input)
-// }
-
 fn parse_f32(input: &[u8]) -> IResult<&[u8], f32>
 {
 	float(input).map(|(next, val)| (next, val as f32))
@@ -134,33 +394,6 @@ fn parse_strand(input: &[u8]) -> IResult<&[u8], Strand>
 		std::str::from_utf8(s).map(Strand::from)
 	})
 	.parse(input)
-}
-
-pub(crate) async fn parse_all_records<'a, Parser, Fut, Record, Tid, Resolver>(
-	bytes: &'a [u8],
-	resolver: impl Fn() -> Resolver,
-	parser: Parser,
-) -> error::Result<Vec<Box<dyn BedLine<Tid>>>>
-where
-	Parser: Fn(Resolver, &'a [u8]) -> Fut,
-	Fut: Future<Output = IResult<&'a [u8], Record>>,
-	Record: BedLine<Tid> + 'static,
-	Tid: Debug + Clone + Send + Sync + PartialEq + 'static,
-{
-	let mut rest = bytes;
-	let mut results = Vec::new();
-
-	while !rest.is_empty()
-	{
-		let resolver = resolver();
-		let (new_rest, record) = parser(resolver, rest)
-			.await
-			.map_err(|_| error::Error::Parse(String::from_utf8_lossy(bytes).to_string()))?;
-		rest = new_rest;
-		results.push(Box::new(record) as Box<dyn BedLine<Tid>>);
-	}
-
-	Ok(results)
 }
 
 pub(crate) async fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
@@ -205,11 +438,11 @@ pub(crate) async fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std
 
 	let tid_id = resolver.lock().await.to_symbol_id(&tid);
 
+	let extra = Bed4Extra { name };
+
 	Ok((
 		input,
-		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
-			.clone()
-			.with_name(name),
+		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
 	))
 }
 
@@ -234,11 +467,14 @@ pub(crate) async fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std
 
 	let tid_id = resolver.lock().await.to_symbol_id(&tid);
 
+	let extra = Bed5Extra {
+		name,
+		score: Some(score),
+	};
+
 	Ok((
 		input,
-		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
-			.with_name(name)
-			.with_score(Some(score)),
+		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
 	))
 }
 
@@ -265,12 +501,15 @@ pub(crate) async fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std
 
 	let tid_id = resolver.lock().await.to_symbol_id(&tid);
 
+	let extra = Bed6Extra {
+		name,
+		score: Some(score),
+		strand,
+	};
+
 	Ok((
 		input,
-		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
-			.with_name(name)
-			.with_score(Some(score))
-			.with_strand(strand),
+		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
 	))
 }
 
@@ -341,27 +580,28 @@ pub(crate) async fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + st
 
 	let tid_id = resolver.lock().await.to_symbol_id(&tid);
 
+	let extra = Bed12Extra {
+		name,
+		score: Some(score),
+		strand,
+		thick_start,
+		thick_end,
+		item_rgb: if item_rgb.is_empty()
+		{
+			None
+		}
+		else
+		{
+			Some(item_rgb)
+		},
+		block_count,
+		block_sizes,
+		block_starts,
+	};
+
 	Ok((
 		input,
-		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
-			.with_name(name)
-			.with_score(Some(score))
-			.with_strand(strand)
-			.with_bed12(
-				thick_start,
-				thick_end,
-				if item_rgb.is_empty()
-				{
-					None
-				}
-				else
-				{
-					Some(item_rgb)
-				},
-				block_count,
-				block_sizes,
-				block_starts,
-			),
+		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
 	))
 }
 
@@ -443,33 +683,34 @@ pub(crate) async fn parse_bedmethyl_record<'a, R: TidResolver>(
 
 	let tid_id = resolver.lock().await.to_symbol_id(&tid);
 
+	let extra = BedMethylExtra {
+		name,
+		score: Some(score),
+		strand,
+		thick_start,
+		thick_end,
+		item_rgb: if item_rgb.is_empty()
+		{
+			None
+		}
+		else
+		{
+			Some(item_rgb)
+		},
+		n_valid_cov,
+		frac_mod,
+		n_mod,
+		n_canonical,
+		n_other_mod,
+		n_delete,
+		n_fail,
+		n_diff,
+		n_nocall,
+	};
+
 	Ok((
 		input,
-		BedRecord::new(Arc::clone(&resolver), tid_id, start, end)
-			.with_name(name)
-			.with_score(Some(score))
-			.with_strand(strand)
-			.with_bedmethyl(
-				thick_start,
-				thick_end,
-				if item_rgb.is_empty()
-				{
-					None
-				}
-				else
-				{
-					Some(item_rgb)
-				},
-				n_valid_cov,
-				frac_mod,
-				n_mod,
-				n_canonical,
-				n_other_mod,
-				n_delete,
-				n_fail,
-				n_diff,
-				n_nocall,
-			),
+		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
 	))
 }
 

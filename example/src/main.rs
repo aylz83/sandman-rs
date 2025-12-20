@@ -1,5 +1,7 @@
 use std::env;
 
+use sandman::bed::AutoBedRecord;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()>
 {
@@ -11,21 +13,19 @@ async fn main() -> anyhow::Result<()>
 
 	println!("Input file: {}", &bed_file);
 
-	let mut reader = sandman::bed::Reader::from_path(bed_file, None).await?;
+	let mut reader = sandman::bed::autoreader::from_path(bed_file, None).await?;
 
-	// let lines = reader.read_lines_in_tid("chr3").await?;
-	// if let Some(ref lines) = lines
+	// let mut lines = Vec::new();
+	// reader.read_lines_in_tid("chr1", &mut lines).await?;
+	// for line in lines
 	// {
-	// 	for line in lines
-	// 	{
-	// 		println!("Bed line: {:?}", line);
-	// 	}
+	// 	println!("Bed line: {:?}", line);
 	// }
 
 	let mut browser_meta: Option<sandman::bed::BrowserMeta> = None;
 	while let Some((track, line)) = reader.read_line_with_meta(&mut browser_meta).await?
 	{
-		println!("Browser meta data = {:?}", browser_meta);
+		// println!("Browser meta data = {:?}", browser_meta);
 		println!("Bed line: {:?} in track {:?}", line, track);
 		println!("Resolved tid = {:?}", line.pretty_tid().await);
 	}
