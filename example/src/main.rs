@@ -1,6 +1,6 @@
 use std::env;
 
-use sandman::bed::AutoBedRecord;
+use sandman::prelude::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()>
