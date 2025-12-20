@@ -5,13 +5,12 @@ use std::str::FromStr;
 use std::ops::Range;
 
 use tokio::fs::File as TokioFile;
-use tokio::io::{BufReader as TokioBufReader};
+use tokio::io::{AsyncRead, AsyncSeek, BufReader as TokioBufReader};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use pufferfish::BGZ;
 
-use crate::AsyncReadSeek;
 use crate::error;
 
 #[derive(Debug)]
@@ -58,7 +57,7 @@ impl Reader
 
 	pub async fn from_reader<R>(reader: R) -> error::Result<Self>
 	where
-		R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+		R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	{
 		let mut async_reader = TokioBufReader::new(reader);
 
@@ -176,7 +175,7 @@ impl Reader
 		reader: &mut TokioBufReader<R>,
 	) -> error::Result<(Header, Vec<String>, Vec<Reference>)>
 	where
-		R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+		R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	{
 		let mut bytes = Vec::new();
 		loop

@@ -7,7 +7,7 @@ use nom::bytes::complete::{is_not, take_while1, take_till1, tag};
 use nom::combinator::{map_res, opt};
 use nom::multi::many0;
 
-use tokio::io::{AsyncBufRead, AsyncBufReadExt};
+use tokio::io::{AsyncSeek, AsyncRead, AsyncBufRead, AsyncBufReadExt};
 
 use tokio::sync::Mutex;
 
@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::fmt::Debug;
 use std::collections::HashMap;
 
-use crate::AsyncReadSeek;
 use crate::bed::BedFormat;
 use crate::bed::BedKind;
 // use crate::bed::BedLine;
@@ -263,7 +262,9 @@ where
 	}
 }
 
-pub(crate) async fn detect_format_from_reader<B: AsyncReadSeek + Send + Unpin + AsyncBufRead>(
+pub(crate) async fn detect_format_from_reader<
+	B: AsyncRead + AsyncSeek + Send + Unpin + AsyncBufRead,
+>(
 	name: String,
 	reader: &mut B,
 	max_lines: usize,

@@ -1,5 +1,4 @@
 use crate::error;
-use crate::AsyncReadSeek;
 use crate::bed::{FileKind, BedKind};
 use crate::bed::{BedRecord, AnyBedRecord, AutoBedRecord};
 use crate::bed::{BedFields, Bed3Fields, Bed4Extra, Bed5Extra, Bed6Extra, Bed12Extra, BedMethylExtra};
@@ -12,7 +11,7 @@ use crate::bed::detect_format_from_reader;
 
 use crate::store::TidResolver;
 
-use tokio::io::AsyncBufRead;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncBufRead};
 use tokio::fs::File as TokioFile;
 
 #[cfg(feature = "interning")]
@@ -24,7 +23,7 @@ use std::path::Path;
 pub async fn from_path<P>(
 	path: P,
 	tabix_path: impl Into<Option<P>>,
-) -> error::Result<Box<dyn AutoReader<()>>>
+) -> error::Result<Box<dyn AutoReader<()> + std::marker::Send + std::marker::Sync>>
 where
 	P: AsRef<Path> + Copy,
 {
@@ -64,9 +63,10 @@ pub async fn from_reader<R>(
 	name: String,
 	mut reader: R,
 	tbi_reader: impl Into<Option<R>>,
-) -> error::Result<Box<dyn AutoReader<()>>>
+) -> error::Result<Box<dyn AutoReader<()> + std::marker::Send + std::marker::Sync>>
 where
-	R: AsyncReadSeek
+	R: AsyncRead
+		+ AsyncSeek
 		+ AsyncBufRead
 		+ std::marker::Send
 		+ std::marker::Unpin
@@ -108,7 +108,7 @@ where
 pub async fn from_path<P>(
 	path: P,
 	tabix_path: impl Into<Option<P>>,
-) -> error::Result<Box<dyn AutoReader<TidStore>>>
+) -> error::Result<Box<dyn AutoReader<TidStore> + std::marker::Send + std::marker::Sync>>
 where
 	P: AsRef<Path> + Copy,
 {
@@ -148,7 +148,7 @@ pub async fn from_path_with_resolver<P>(
 	path: P,
 	tabix_path: impl Into<Option<P>>,
 	resolver: Arc<Mutex<TidStore>>,
-) -> error::Result<Box<dyn AutoReader<TidStore>>>
+) -> error::Result<Box<dyn AutoReader<TidStore> + std::marker::Send + std::marker::Sync>>
 where
 	P: AsRef<Path> + Copy,
 {
@@ -200,9 +200,10 @@ pub async fn from_reader<R>(
 	name: String,
 	mut reader: R,
 	tbi_reader: impl Into<Option<R>>,
-) -> error::Result<Box<dyn AutoReader<TidStore>>>
+) -> error::Result<Box<dyn AutoReader<TidStore> + std::marker::Send + std::marker::Sync>>
 where
-	R: AsyncReadSeek
+	R: AsyncRead
+		+ AsyncSeek
 		+ AsyncBufRead
 		+ std::marker::Send
 		+ std::marker::Unpin
@@ -243,9 +244,10 @@ pub async fn from_reader_with_resolver<R>(
 	mut reader: R,
 	tbi_reader: impl Into<Option<R>>,
 	resolver: Arc<Mutex<TidStore>>,
-) -> error::Result<Box<dyn AutoReader<TidStore>>>
+) -> error::Result<Box<dyn AutoReader<TidStore> + std::marker::Send + std::marker::Sync>>
 where
-	R: AsyncReadSeek
+	R: AsyncRead
+		+ AsyncSeek
 		+ AsyncBufRead
 		+ std::marker::Send
 		+ std::marker::Unpin
@@ -322,7 +324,7 @@ where
 #[async_trait::async_trait]
 impl<R, T, F> AutoReader<T> for crate::bed::Reader<R, T, F>
 where
-	R: AsyncReadSeek + Send + Unpin + Sync,
+	R: AsyncRead + AsyncSeek + Send + Unpin + Sync,
 	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 	F: BedFields<T, T::Tid> + std::fmt::Debug,
 	BedRecord<T, T::Tid, F>: IntoAnyBedRecord<T>,

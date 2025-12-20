@@ -10,14 +10,13 @@ use std::io::Cursor;
 
 use tokio::io::SeekFrom;
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
+use tokio::io::{AsyncRead, AsyncSeek, AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use pufferfish::BGZ;
 
 use crate::error;
-use crate::AsyncReadSeek;
 use crate::tabix;
 use crate::bed::*;
 
@@ -32,7 +31,7 @@ use crate::store::TidStore;
 
 pub(crate) enum FileKind<R>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 {
 	Plain(TokioBufReader<R>),
 	BGZF(TokioBufReader<R>),
@@ -40,7 +39,7 @@ where
 
 pub struct Reader<R, T, F>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 	F: BedFields<T, T::Tid> + std::fmt::Debug,
 {
@@ -127,7 +126,7 @@ where
 #[cfg(not(feature = "interning"))]
 impl<R, F> Reader<R, (), F>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	F: BedFields<(), String> + std::fmt::Debug,
 {
 	pub async fn from_reader(
@@ -157,7 +156,7 @@ where
 #[cfg(feature = "interning")]
 impl<R, F> Reader<R, TidStore, F>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	F: BedFields<TidStore, <TidStore as TidResolver>::Tid> + std::fmt::Debug,
 {
 	pub async fn from_reader(
@@ -227,7 +226,7 @@ where
 
 impl<R, T, F> Reader<R, T, F>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 	F: BedFields<T, T::Tid> + std::fmt::Debug,
 {

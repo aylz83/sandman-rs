@@ -12,6 +12,8 @@ A Rust crate for asynchronous reading of bed, bgzipped bed, and tabix indexed be
 ## Example usage -
 
 ```rust
+use sandman::prelude::*;
+
 // "my_bed.bed.gz.tbi" will be opened if exists, or this can be supplied by
 // changing None to a path if the tbi is under a different name/location
 // requires known Bed3, 4, 5, 6, 12 or Methyl format at compile time
@@ -42,4 +44,4 @@ let mut reader = reader.read_line_with_meta(&mut browser_meta).await?
 - [ ] Documentation
 - [ ] bigBed?
 - [ ] Custom bed column formats?
-- [x] Don't allocate Record on heap on every read_line
+- [X] Don't allocate Record on heap on every read_line
