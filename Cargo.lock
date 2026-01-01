@@ -388,7 +388,8 @@ dependencies = [
 
 [[package]]
 name = "pufferfish"
-version = "0.2.0"
+version = "0.1.3"
+source = "git+https://github.com/aylz83/pufferfish-rs#8d01884e35e2c703b25bb41b36a61d034833970f"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -423,7 +424,7 @@ checksum = "56f7d92ca342cea22a06f2121d944b4fd82af56988c270852495420f961d4ace"
 
 [[package]]
 name = "sandman"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bincode",
