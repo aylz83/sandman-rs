@@ -877,7 +877,7 @@ where
 
 			if start_offset < end_offset
 			{
-				bgzf_block.extend_from_slice(&block[start as usize..end as usize]);
+				bgzf_block.extend_from_slice(&block[start_offset as usize..end_offset as usize]);
 			}
 		}
 
