@@ -7,7 +7,7 @@ use nom::bytes::complete::{is_not, take_while1, take_till1, tag};
 use nom::combinator::{map_res, opt};
 use nom::multi::many0;
 
-use tokio::io::{AsyncSeek, AsyncRead, AsyncBufRead, AsyncBufReadExt};
+use tokio::io::{SeekFrom, AsyncSeek, AsyncSeekExt, AsyncRead, AsyncBufRead, AsyncBufReadExt};
 
 use tokio::sync::Mutex;
 
@@ -17,7 +17,8 @@ use std::collections::HashMap;
 
 use crate::bed::BedFormat;
 use crate::bed::BedKind;
-// use crate::bed::BedLine;
+#[cfg(feature = "bigbed")]
+use crate::bed::bigbedrecord::BigBedIndex;
 use crate::bed::BrowserMeta;
 use crate::bed::Track;
 use crate::bed::Strand;
@@ -31,6 +32,15 @@ use crate::bed::BedMethylExtra;
 use crate::store::TidResolver;
 use crate::error;
 
+pub enum ParseContext<'a>
+{
+	#[cfg(feature = "bigbed")]
+	BigBed(&'a BigBedIndex),
+	#[cfg(not(feature = "bigbed"))]
+	#[doc(hidden)]
+	_Lifetime(std::marker::PhantomData<&'a ()>),
+}
+
 #[async_trait::async_trait]
 pub trait BedFields<Resolver, Tid>: Send + Sync
 where
@@ -39,9 +49,10 @@ where
 {
 	const KIND: BedKind;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	where
@@ -60,9 +71,10 @@ where
 {
 	const KIND: BedKind = BedKind::Bed3;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		_ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	{
@@ -95,9 +107,10 @@ where
 {
 	const KIND: BedKind = BedKind::Bed4;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		_ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	{
@@ -130,9 +143,10 @@ where
 {
 	const KIND: BedKind = BedKind::Bed5;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		_ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	{
@@ -165,9 +179,10 @@ where
 {
 	const KIND: BedKind = BedKind::Bed6;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		_ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	{
@@ -200,9 +215,10 @@ where
 {
 	const KIND: BedKind = BedKind::Bed12;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		_ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	{
@@ -235,9 +251,10 @@ where
 {
 	const KIND: BedKind = BedKind::BedMethyl;
 
-	async fn parse_into<'a>(
+	async fn parse_into<'a, 'b>(
 		resolver: Arc<Mutex<Resolver>>,
 		input: &'a [u8],
+		_ctx: Option<ParseContext<'b>>,
 		record: &mut BedRecord<Resolver, Tid, Self>,
 	) -> error::Result<&'a [u8]>
 	{
@@ -289,6 +306,7 @@ pub(crate) async fn detect_format_from_reader<
 
 		if let Ok(format) = BedFormat::try_from(&accumulated)
 		{
+			reader.seek(SeekFrom::Start(0)).await?;
 			return Ok(format);
 		}
 	}

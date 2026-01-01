@@ -8,18 +8,19 @@ use nom::Finish;
 
 use std::io::Cursor;
 
-use tokio::io::SeekFrom;
-use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
+use tokio::fs::File;
+use tokio::io::{SeekFrom, AsyncRead, AsyncSeek, AsyncBufReadExt, AsyncSeekExt, BufReader};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use pufferfish::BGZ;
+use pufferfish::prelude::*;
 
 use crate::error;
 use crate::tabix;
-use crate::bed::*;
 
+#[cfg(feature = "bigbed")]
+use crate::bed::{bigbedrecord::BigBedIndex, ParseContext, BedKind};
+use crate::bed::{BedRecord, BrowserMeta, Track, BedFormat};
 use crate::bed::parser::detect_format_from_reader;
 use crate::bed::parser::BedFields;
 use crate::bed::parser::parse_browser_line;
@@ -33,8 +34,17 @@ pub(crate) enum FileKind<R>
 where
 	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 {
-	Plain(TokioBufReader<R>),
-	BGZF(TokioBufReader<R>),
+	Plain(BufReader<R>),
+	BGZF(BufReader<R>),
+	#[cfg(feature = "bigbed")]
+	ZLIB(BufReader<R>),
+}
+
+pub(crate) enum Index
+{
+	BGZF(tabix::Reader),
+	#[cfg(feature = "bigbed")]
+	ZLIB(BigBedIndex),
 }
 
 pub struct Reader<R, T, F>
@@ -47,7 +57,7 @@ where
 	pub(crate) reader: FileKind<R>,
 	pub format: BedFormat,
 
-	pub(crate) tbi_reader: Option<tabix::Reader>,
+	pub(crate) index: Option<Index>,
 	pub(crate) bgz_buffer: String,
 	pub(crate) track_line: Option<Track>,
 	pub(crate) last_browser: Option<BrowserMeta>,
@@ -57,7 +67,7 @@ where
 }
 
 #[cfg(not(feature = "interning"))]
-impl<F> Reader<TokioFile, (), F>
+impl<F> Reader<File, (), F>
 where
 	F: BedFields<(), String> + std::fmt::Debug,
 {
@@ -80,7 +90,7 @@ where
 }
 
 #[cfg(feature = "interning")]
-impl<F> Reader<TokioFile, TidStore, F>
+impl<F> Reader<File, TidStore, F>
 where
 	F: BedFields<TidStore, <TidStore as TidResolver>::Tid> + std::fmt::Debug,
 {
@@ -132,17 +142,17 @@ where
 	pub async fn from_reader(
 		name: String,
 		reader: R,
-		tbi_reader: impl Into<Option<R>>,
+		tbi_index: impl Into<Option<R>>,
 	) -> error::Result<Self>
 	{
-		let (format, reader, tbi_reader) =
-			Self::open_bed_reader(&name, reader, tbi_reader.into()).await?;
+		let (format, reader, index) =
+			Self::open_bed_reader(&name, reader, tbi_index.into()).await?;
 
 		Ok(Reader {
 			name,
 			reader,
 			format,
-			tbi_reader,
+			index,
 			bgz_buffer: String::new(),
 			track_line: None,
 			last_browser: None,
@@ -165,23 +175,16 @@ where
 		tbi_reader: impl Into<Option<R>>,
 	) -> error::Result<Self>
 	{
-		let (format, reader, tbi_reader) =
+		let (format, reader, index) =
 			Self::open_bed_reader(&name, reader, tbi_reader.into()).await?;
 
 		let resolver = Arc::new(Mutex::new(TidStore::default()));
-		if let Some(tbi) = &tbi_reader
-		{
-			for tid in &tbi.seqnames
-			{
-				resolver.lock().await.to_symbol_id(&tid);
-			}
-		}
 
 		Ok(Reader {
 			name,
 			reader,
 			format,
-			tbi_reader,
+			index,
 			bgz_buffer: String::new(),
 			track_line: None,
 			last_browser: None,
@@ -198,22 +201,14 @@ where
 		resolver: Arc<Mutex<TidStore>>,
 	) -> error::Result<Self>
 	{
-		let (format, reader, tbi_reader) =
+		let (format, reader, index) =
 			Self::open_bed_reader(&name, reader, tbi_reader.into()).await?;
-
-		if let Some(tbi) = &tbi_reader
-		{
-			for tid in &tbi.seqnames
-			{
-				resolver.lock().await.to_symbol_id(&tid);
-			}
-		}
 
 		Ok(Reader {
 			name,
 			reader,
 			format,
-			tbi_reader,
+			index,
 			bgz_buffer: String::new(),
 			track_line: None,
 			last_browser: None,
@@ -230,67 +225,138 @@ where
 	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
 	F: BedFields<T, T::Tid> + std::fmt::Debug,
 {
+	#[cfg(not(feature = "bigbed"))]
+	async fn read_kind(
+		is_bgz: bool,
+		_is_big_bed: bool,
+		name: &String,
+		mut reader: BufReader<R>,
+		tbi_reader: Option<R>,
+	) -> error::Result<(BedFormat, FileKind<R>, Option<Index>)>
+	{
+		if is_bgz
+		{
+			let block = reader
+				.read_bgzf_block(Some(is_bgzf_eof))
+				.await
+				.map_err(|_| error::Error::BedFormat(name.clone()))?
+				.ok_or(error::Error::BedFormat(name.clone()))?;
+			reader.seek(SeekFrom::Start(0)).await?;
+
+			let tbi_reader = match tbi_reader
+			{
+				Some(reader) => Some(Index::BGZF(tabix::Reader::from_reader(reader).await?)),
+				None => None,
+			};
+
+			let mut buffer = BufReader::new(Cursor::new(&block));
+			Ok((
+				detect_format_from_reader(name.clone(), &mut buffer, 10).await?,
+				FileKind::BGZF(reader),
+				tbi_reader,
+			))
+		}
+		else
+		{
+			Ok((
+				detect_format_from_reader(name.clone(), &mut reader, 10).await?,
+				FileKind::Plain(reader),
+				None,
+			))
+		}
+	}
+
+	#[cfg(feature = "bigbed")]
+	async fn read_kind(
+		is_bgz: bool,
+		is_bigbed: bool,
+		name: &String,
+		mut reader: BufReader<R>,
+		tbi_reader: Option<R>,
+	) -> error::Result<(BedFormat, FileKind<R>, Option<Index>)>
+	{
+		if is_bgz
+		{
+			let block = reader
+				.read_bgzf_block(Some(is_bgzf_eof))
+				.await
+				.map_err(|_| error::Error::BedFormat(name.clone()))?
+				.ok_or(error::Error::BedFormat(name.clone()))?;
+			reader.seek(SeekFrom::Start(0)).await?;
+
+			let tbi_reader = match tbi_reader
+			{
+				Some(reader) => Some(Index::BGZF(tabix::Reader::from_reader(reader).await?)),
+				None => None,
+			};
+
+			let mut buffer = BufReader::new(Cursor::new(&block));
+			Ok((
+				detect_format_from_reader(name.clone(), &mut buffer, 10).await?,
+				FileKind::BGZF(reader),
+				tbi_reader,
+			))
+		}
+		else if is_bigbed
+		{
+			let header = BigBedIndex::read_index(&mut reader).await?;
+			Ok((
+				BedFormat {
+					kind: BedKind::BigBed,
+					has_tracks: None,
+					has_browsers: None,
+				},
+				FileKind::ZLIB(reader),
+				Some(Index::ZLIB(header)),
+			))
+		}
+		else
+		{
+			Ok((
+				detect_format_from_reader(name.clone(), &mut reader, 10).await?,
+				FileKind::Plain(reader),
+				None,
+			))
+		}
+	}
+
 	async fn open_bed_reader(
 		name: &String,
 		reader: R,
 		tbi_reader: Option<R>,
-	) -> error::Result<(BedFormat, FileKind<R>, Option<tabix::Reader>)>
+	) -> error::Result<(BedFormat, FileKind<R>, Option<Index>)>
 	{
-		let mut reader = TokioBufReader::new(reader);
-
-		let is_bgzf = reader.is_bgz().await?;
-		reader.seek(SeekFrom::Start(0)).await?;
-
-		let format = if is_bgzf
-		{
-			let block = reader
-				.read_bgzf_block(Some(pufferfish::is_bgzf_eof))
-				.await
-				.map_err(|_| error::Error::BedFormat(name.clone()))?
-				.ok_or(error::Error::BedFormat(name.clone()))?;
-
-			let mut buffer = TokioBufReader::new(Cursor::new(&block));
-			detect_format_from_reader(name.clone(), &mut buffer, 10).await?
-		}
-		else
-		{
-			detect_format_from_reader(name.clone(), &mut reader, 10).await?
-		};
+		println!("open_bed_reader");
+		let mut reader = BufReader::new(reader);
 
 		reader.seek(SeekFrom::Start(0)).await?;
 
-		let reader = if is_bgzf
-		{
-			FileKind::BGZF(reader)
-		}
-		else
-		{
-			FileKind::Plain(reader)
-		};
+		let is_bgz = reader.is_bgz().await;
+		reader.seek(SeekFrom::Start(0)).await?;
 
-		let tbi_reader = match tbi_reader
-		{
-			Some(reader) => Some(tabix::Reader::from_reader(reader).await?),
-			None => None,
-		};
+		#[cfg(feature = "bigbed")]
+		let is_bigbed = reader.is_bigbed().await;
+		#[cfg(not(feature = "bigbed"))]
+		let is_bigbed = false;
 
-		Ok((format, reader, tbi_reader))
+		reader.seek(SeekFrom::Start(0)).await?;
+
+		let (format, reader, index) =
+			Self::read_kind(is_bgz, is_bigbed, name, reader, tbi_reader).await?;
+		Ok((format, reader, index))
 	}
 
-	async fn open_bed_file<P>(
-		path: P,
-		tabix_path: Option<P>,
-	) -> error::Result<(TokioFile, Option<TokioFile>)>
+	async fn open_bed_file<P>(path: P, tabix_path: Option<P>) -> error::Result<(File, Option<File>)>
 	where
 		P: AsRef<Path> + Copy,
 	{
 		let path = path.as_ref();
 
-		let gzip_file = TokioFile::open(path).await?;
+		let gzip_file = File::open(path).await?;
 
 		let tabix_file = if let Some(tabix_path) = tabix_path
 		{
-			Some(TokioFile::open(tabix_path).await?)
+			Some(File::open(tabix_path).await?)
 		}
 		else if path.extension().and_then(|ext| ext.to_str()) == Some("gz")
 		{
@@ -299,7 +365,7 @@ where
 
 			if tokio::fs::metadata(&tbi_path).await.is_ok()
 			{
-				Some(TokioFile::open(&tbi_path).await?)
+				Some(File::open(&tbi_path).await?)
 			}
 			else
 			{
@@ -348,12 +414,7 @@ where
 			// If buffer is empty, read next BGZF block
 			let Some(block) = (match &mut self.reader
 			{
-				FileKind::BGZF(reader) =>
-				{
-					reader
-						.read_bgzf_block(Some(pufferfish::is_bgzf_eof))
-						.await?
-				}
+				FileKind::BGZF(reader) => reader.read_bgzf_block(Some(is_bgzf_eof)).await?,
 				_ => None,
 			})
 			else
@@ -390,37 +451,6 @@ where
 		BedFields::<T, T::Tid>::empty(self.resolver.clone()).await
 	}
 
-	// pub async fn blank_record(&self) -> Record<T::Tid>
-	// {
-	// 	match self.format.kind
-	// 	{
-	// 		BedKind::Bed3 =>
-	// 		{
-	// 			Box::new(BedRecord::<_, _, Bed3Fields>::empty(self.resolver.clone()).await)
-	// 		}
-	// 		BedKind::Bed4 =>
-	// 		{
-	// 			Box::new(BedRecord::<_, _, Bed4Extra>::empty(self.resolver.clone()).await)
-	// 		}
-	// 		BedKind::Bed5 =>
-	// 		{
-	// 			Box::new(BedRecord::<_, _, Bed5Extra>::empty(self.resolver.clone()).await)
-	// 		}
-	// 		BedKind::Bed6 =>
-	// 		{
-	// 			Box::new(BedRecord::<_, _, Bed6Extra>::empty(self.resolver.clone()).await)
-	// 		}
-	// 		BedKind::Bed12 =>
-	// 		{
-	// 			Box::new(BedRecord::<_, _, Bed12Extra>::empty(self.resolver.clone()).await)
-	// 		}
-	// 		BedKind::BedMethyl =>
-	// 		{
-	// 			Box::new(BedRecord::<_, _, BedMethylExtra>::empty(self.resolver.clone()).await)
-	// 		}
-	// 	}
-	// }
-
 	pub async fn store(&mut self) -> Arc<Mutex<T>>
 	{
 		self.resolver.clone()
@@ -435,6 +465,11 @@ where
 				reader.seek(SeekFrom::Start(0)).await?;
 			}
 			FileKind::BGZF(reader) =>
+			{
+				reader.seek(SeekFrom::Start(0)).await?;
+			}
+			#[cfg(feature = "bigbed")]
+			FileKind::ZLIB(reader) =>
 			{
 				reader.seek(SeekFrom::Start(0)).await?;
 			}
@@ -560,6 +595,13 @@ where
 						return Ok(None);
 					}
 				}
+				#[cfg(feature = "bigbed")]
+				FileKind::ZLIB(_) =>
+				{
+					return Err(error::Error::ReadLineNotSupported(
+						self.format.kind.to_string(),
+					))
+				}
 			}
 
 			if line.trim().is_empty()
@@ -577,23 +619,35 @@ where
 		record: &mut BedRecord<T, T::Tid, F>,
 	) -> error::Result<&'a [u8]>
 	{
-		F::parse_into(self.resolver.clone(), input, record).await
+		match &self.reader
+		{
+			FileKind::Plain(_) => F::parse_into(self.resolver.clone(), input, None, record).await,
+			FileKind::BGZF(_) => F::parse_into(self.resolver.clone(), input, None, record).await,
+			#[cfg(feature = "bigbed")]
+			FileKind::ZLIB(_) =>
+			{
+				let Some(Index::ZLIB(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::NotBigBed);
+				};
+
+				F::parse_into(
+					self.resolver.clone(),
+					input,
+					Some(ParseContext::BigBed(index_reader)),
+					record,
+				)
+				.await
+			}
+		}
 	}
 
-	pub(crate) async fn read_bytes_for_region(
-		&mut self,
+	pub(crate) async fn read_bgzf_bytes_for_region(
+		reader: &mut BufReader<R>,
 		region: &[Range<u64>],
 	) -> error::Result<Vec<u8>>
 	{
-		let reader = match &mut self.reader
-		{
-			FileKind::Plain(_) =>
-			{
-				return Err(error::Error::PlainBedRegion(self.name.clone()));
-			}
-			FileKind::BGZF(r) => r,
-		};
-
 		// Rough capacity estimate
 		let estimated_size: usize = region.iter().map(|r| (r.end - r.start) as usize).sum();
 
@@ -637,72 +691,29 @@ where
 					u64::MAX
 				};
 
-				Self::read_subblock(reader, start, end, &mut buffer).await?;
+				Self::read_bgzf_subblock(reader, start, end, &mut buffer).await?;
 			}
 		}
 
-		// match &mut self.reader
-		// {
-		// 	FileKind::Plain(_) =>
-		// 	{
-		// 		return Err(error::Error::PlainBedRegion(self.name.clone()));
-		// 	}
-		// 	FileKind::BGZF(reader) =>
-		// 	{
-		// 		for offset in region
-		// 		{
-		// 			let (block_start, uncompressed_start) =
-		// 				(offset.start >> 16, offset.start & 0xFFFF);
-		// 			let (block_end, uncompressed_end) = (offset.end >> 16, offset.end & 0xFFFF);
-
-		// 			if offset.start == offset.end
-		// 			{
-		// 				break;
-		// 			}
-
-		// 			reader.seek(SeekFrom::Start(block_start)).await?;
-
-		// 			if block_start == block_end
-		// 			{
-		// 				Self::read_subblock(
-		// 					reader,
-		// 					uncompressed_start,
-		// 					uncompressed_end,
-		// 					&mut buffer,
-		// 				)
-		// 				.await?;
-		// 			}
-		// 			else
-		// 			{
-		// 				let mut current_position = block_start;
-		// 				while current_position <= block_end
-		// 				{
-		// 					let start_offset = if current_position == block_start
-		// 					{
-		// 						uncompressed_start
-		// 					}
-		// 					else
-		// 					{
-		// 						0
-		// 					};
-		// 					let end_offset = if current_position == block_end
-		// 					{
-		// 						uncompressed_end
-		// 					}
-		// 					else
-		// 					{
-		// 						u64::MAX
-		// 					};
-		// 					Self::read_subblock(reader, start_offset, end_offset, &mut buffer)
-		// 						.await?;
-		// 					current_position = reader.seek(SeekFrom::Current(0)).await?;
-		// 				}
-		// 			}
-		// 		}
-		// 	}
-		// }
-
 		Ok(buffer)
+	}
+
+	#[cfg(feature = "bigbed")]
+	pub(crate) async fn read_zlib_bytes_for_region(
+		reader: &mut BufReader<R>,
+		region: Vec<(u64, u32)>,
+	) -> error::Result<Vec<u8>>
+	{
+		let mut bytes = Vec::new();
+
+		for (offset, compressed_size) in region
+		{
+			reader.seek(SeekFrom::Start(offset)).await?;
+			let decompressed = reader.read_zlib_block(compressed_size as usize).await?;
+			bytes.extend_from_slice(&decompressed);
+		}
+
+		Ok(bytes)
 	}
 
 	pub async fn read_lines_in_tid(
@@ -711,24 +722,56 @@ where
 		out: &mut Vec<BedRecord<T, T::Tid, F>>,
 	) -> error::Result<()>
 	{
-		if matches!(self.reader, FileKind::Plain(_))
+		match &mut self.reader
 		{
-			return Err(error::Error::PlainBedRegion(self.name.clone()));
+			FileKind::Plain(_) =>
+			{
+				return Err(error::Error::PlainBedRegion(self.name.clone()));
+			}
+			FileKind::BGZF(reader) =>
+			{
+				let Some(Index::BGZF(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::TabixNotOpen(self.name.clone()));
+				};
+
+				let Some(ranges) = index_reader.offsets_for_tid(tid)?
+				else
+				{
+					out.clear();
+					return Ok(());
+				};
+
+				let bytes = Self::read_bgzf_bytes_for_region(reader, &ranges).await?;
+				if bytes.is_empty()
+				{
+					return Ok(());
+				}
+
+				self.parse_records_from_bytes(&bytes as &[u8], out).await
+			}
+			#[cfg(feature = "bigbed")]
+			FileKind::ZLIB(reader) =>
+			{
+				let Some(Index::ZLIB(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::NotBigBed);
+				};
+
+				let ranges = index_reader.offsets_for_tid(reader, tid).await?;
+				println!("ranges = {:?}", ranges);
+
+				let bytes = Self::read_zlib_bytes_for_region(reader, ranges).await?;
+				if bytes.is_empty()
+				{
+					return Ok(());
+				}
+
+				self.parse_records_from_bytes(&bytes as &[u8], out).await
+			}
 		}
-
-		let reader = self
-			.tbi_reader
-			.as_ref()
-			.ok_or(error::Error::TabixNotOpen(self.name.clone()))?;
-
-		let Some(ranges) = reader.offsets_for_tid(tid)?
-		else
-		{
-			out.clear();
-			return Ok(());
-		};
-
-		self.read_lines_in_range(ranges, out).await
 	}
 
 	pub async fn read_lines_in_tid_region(
@@ -739,24 +782,54 @@ where
 		out: &mut Vec<BedRecord<T, T::Tid, F>>,
 	) -> error::Result<()>
 	{
-		if matches!(self.reader, FileKind::Plain(_))
+		match &mut self.reader
 		{
-			return Err(error::Error::PlainBedRegion(self.name.clone()));
-		}
+			FileKind::Plain(_) => return Err(error::Error::PlainBedRegion(self.name.clone())),
+			FileKind::BGZF(reader) =>
+			{
+				let Some(Index::BGZF(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::TabixNotOpen(self.name.clone()));
+				};
 
-		let reader = self
-			.tbi_reader
-			.as_ref()
-			.ok_or(error::Error::TabixNotOpen(self.name.clone()))?;
+				let Some(ranges) = index_reader.offsets_for_tid_region(tid, start, end)?
+				else
+				{
+					out.clear();
+					return Ok(());
+				};
 
-		let Some(ranges) = reader.offsets_for_tid_region(tid, start, end)?
-		else
-		{
-			out.clear();
-			return Ok(());
+				let bytes = Self::read_bgzf_bytes_for_region(reader, &ranges).await?;
+				if bytes.is_empty()
+				{
+					return Ok(());
+				}
+
+				self.parse_records_from_bytes(&bytes as &[u8], out).await?
+			}
+			#[cfg(feature = "bigbed")]
+			FileKind::ZLIB(reader) =>
+			{
+				let Some(Index::ZLIB(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::NotBigBed);
+				};
+
+				let ranges = index_reader
+					.offsets_for_tid_region(reader, tid, start, end)
+					.await?;
+
+				let bytes = Self::read_zlib_bytes_for_region(reader, ranges).await?;
+				if bytes.is_empty()
+				{
+					return Ok(());
+				}
+
+				self.parse_records_from_bytes(&bytes as &[u8], out).await?
+			}
 		};
-
-		self.read_lines_in_range(ranges, out).await?;
 
 		let tid_id = {
 			let r = self.resolver.lock().await;
@@ -769,18 +842,12 @@ where
 		Ok(())
 	}
 
-	pub async fn read_lines_in_range(
+	pub async fn parse_records_from_bytes(
 		&mut self,
-		region: Vec<Range<u64>>,
+		bytes: &[u8],
 		out: &mut Vec<BedRecord<T, T::Tid, F>>,
 	) -> error::Result<()>
 	{
-		let bytes = self.read_bytes_for_region(&region).await?;
-		if bytes.is_empty()
-		{
-			return Ok(());
-		}
-
 		out.clear();
 		let mut cursor = &bytes as &[u8];
 
@@ -794,14 +861,14 @@ where
 		Ok(())
 	}
 
-	async fn read_subblock(
-		reader: &mut TokioBufReader<R>,
+	async fn read_bgzf_subblock(
+		reader: &mut BufReader<R>,
 		start: u64,
 		end: u64,
 		bgzf_block: &mut Vec<u8>,
 	) -> error::Result<()>
 	{
-		if let Ok(Some(block)) = reader.read_bgzf_block(Some(pufferfish::is_bgzf_eof)).await
+		if let Ok(Some(block)) = reader.read_bgzf_block(Some(is_bgzf_eof)).await
 		{
 			let block_len = block.len() as u64;
 
@@ -816,31 +883,4 @@ where
 
 		Ok(())
 	}
-
-	// async fn read_subblock(
-	// 	reader: &mut TokioBufReader<R>,
-	// 	start: u64,
-	// 	end: u64,
-	// 	bgzf_block: &mut Vec<u8>,
-	// ) -> error::Result<()>
-	// {
-	// 	if let Ok(Some(block)) = reader.read_bgzf_block(Some(pufferfish::is_bgzf_eof)).await
-	// 	{
-	// 		let block_len = block.len() as u64;
-	// 		let start_offset = start.min(block_len);
-	// 		let end_offset = end.min(block_len);
-
-	// 		if start_offset < end_offset
-	// 		{
-	// 			let mut bytes = vec![0u8; (end_offset - start_offset) as usize];
-	// 			let cursor = Cursor::new(&block);
-	// 			let mut buffer = BufReader::new(cursor);
-	// 			buffer.seek(SeekFrom::Start(start_offset))?;
-	// 			buffer.read_exact(&mut bytes)?;
-	// 			bgzf_block.extend_from_slice(&bytes);
-	// 		}
-	// 	}
-
-	// 	Ok(())
-	// }
 }

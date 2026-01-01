@@ -1,6 +1,8 @@
 use crate::error;
-use crate::bed::{FileKind, BedKind};
+use crate::bed::{FileKind, BedKind, Index};
 use crate::bed::{BedRecord, AnyBedRecord, AutoBedRecord};
+#[cfg(feature = "bigbed")]
+use crate::bed::bigbedrecord::BigBedExtra;
 use crate::bed::{BedFields, Bed3Fields, Bed4Extra, Bed5Extra, Bed6Extra, Bed12Extra, BedMethylExtra};
 use crate::bed::Track;
 use crate::bed::Reader;
@@ -55,6 +57,11 @@ where
 		{
 			Box::new(Reader::<TokioFile, (), BedMethylExtra>::from_path(path, tabix_path).await?)
 		}
+		#[cfg(feature = "bigbed")]
+		BedKind::BigBed =>
+		{
+			Box::new(Reader::<TokioFile, (), BigBedExtra>::from_path(path, tabix_path).await?)
+		}
 	})
 }
 
@@ -101,6 +108,11 @@ where
 		{
 			Box::new(Reader::<_, (), BedMethylExtra>::from_reader(name, reader, tbi_reader).await?)
 		}
+		#[cfg(feature = "bigbed")]
+		BedKind::BigBed =>
+		{
+			Box::new(Reader::<_, (), BigBedExtra>::from_reader(name, reader, tbi_reader).await?)
+		}
 	})
 }
 
@@ -140,6 +152,11 @@ where
 		BedKind::BedMethyl => Box::new(
 			Reader::<TokioFile, TidStore, BedMethylExtra>::from_path(path, tabix_path).await?,
 		),
+		#[cfg(feature = "bigbed")]
+		BedKind::BigBed =>
+		{
+			Box::new(Reader::<TokioFile, TidStore, BigBedExtra>::from_path(path, tabix_path).await?)
+		}
 	})
 }
 
@@ -192,6 +209,13 @@ where
 			)
 			.await?,
 		),
+		#[cfg(feature = "bigbed")]
+		BedKind::BigBed => Box::new(
+			Reader::<TokioFile, TidStore, BigBedExtra>::from_path_with_resolver(
+				path, tabix_path, resolver,
+			)
+			.await?,
+		),
 	})
 }
 
@@ -234,6 +258,10 @@ where
 		),
 		BedKind::BedMethyl => Box::new(
 			Reader::<_, TidStore, BedMethylExtra>::from_reader(name, reader, tbi_reader).await?,
+		),
+		#[cfg(feature = "bigbed")]
+		BedKind::BigBed => Box::new(
+			Reader::<_, TidStore, BigBedExtra>::from_reader(name, reader, tbi_reader).await?,
 		),
 	})
 }
@@ -290,6 +318,13 @@ where
 		),
 		BedKind::BedMethyl => Box::new(
 			Reader::<_, TidStore, BedMethylExtra>::from_reader_with_resolver(
+				name, reader, tbi_reader, resolver,
+			)
+			.await?,
+		),
+		#[cfg(feature = "bigbed")]
+		BedKind::BigBed => Box::new(
+			Reader::<_, TidStore, BigBedExtra>::from_reader_with_resolver(
 				name, reader, tbi_reader, resolver,
 			)
 			.await?,
@@ -362,24 +397,46 @@ where
 		out: &mut Vec<AnyBedRecord<T>>,
 	) -> error::Result<()>
 	{
-		if matches!(self.reader, FileKind::Plain(_))
+		let bytes = match &mut self.reader
 		{
-			return Err(error::Error::PlainBedRegion(self.name.clone()));
-		}
+			FileKind::Plain(_) =>
+			{
+				return Err(error::Error::PlainBedRegion(self.name.clone()));
+			}
+			FileKind::BGZF(reader) =>
+			{
+				let Some(Index::BGZF(tbi_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::TabixNotOpen(self.name.clone()));
+				};
 
-		let reader = self
-			.tbi_reader
-			.as_ref()
-			.ok_or(error::Error::TabixNotOpen(self.name.clone()))?;
+				let Some(ranges) = tbi_reader.offsets_for_tid_region(tid, start, end)?
+				else
+				{
+					out.clear();
+					return Ok(());
+				};
 
-		let Some(ranges) = reader.offsets_for_tid_region(tid, start, end)?
-		else
-		{
-			out.clear();
-			return Ok(());
+				Self::read_bgzf_bytes_for_region(reader, &ranges).await?
+			}
+			#[cfg(feature = "bigbed")]
+			FileKind::ZLIB(reader) =>
+			{
+				let Some(Index::ZLIB(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::NotBigBed);
+				};
+
+				let ranges = index_reader
+					.offsets_for_tid_region(reader, tid, start, end)
+					.await?;
+
+				Self::read_zlib_bytes_for_region(reader, ranges).await?
+			}
 		};
 
-		let bytes = self.read_bytes_for_region(&ranges).await?;
 		out.clear();
 		let mut cursor = &bytes[..];
 
@@ -407,24 +464,44 @@ where
 		out: &mut Vec<AnyBedRecord<T>>,
 	) -> error::Result<()>
 	{
-		if matches!(self.reader, FileKind::Plain(_))
+		let bytes = match &mut self.reader
 		{
-			return Err(error::Error::PlainBedRegion(self.name.clone()));
-		}
+			FileKind::Plain(_) =>
+			{
+				return Err(error::Error::PlainBedRegion(self.name.clone()));
+			}
+			FileKind::BGZF(reader) =>
+			{
+				let Some(Index::BGZF(tbi_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::TabixNotOpen(self.name.clone()));
+				};
 
-		let reader = self
-			.tbi_reader
-			.as_ref()
-			.ok_or(error::Error::TabixNotOpen(self.name.clone()))?;
+				let Some(ranges) = tbi_reader.offsets_for_tid(tid)?
+				else
+				{
+					out.clear();
+					return Ok(());
+				};
 
-		let Some(ranges) = reader.offsets_for_tid(tid)?
-		else
-		{
-			out.clear();
-			return Ok(());
+				Self::read_bgzf_bytes_for_region(reader, &ranges).await?
+			}
+			#[cfg(feature = "bigbed")]
+			FileKind::ZLIB(reader) =>
+			{
+				let Some(Index::ZLIB(index_reader)) = self.index.as_ref()
+				else
+				{
+					return Err(error::Error::NotBigBed);
+				};
+
+				let ranges = index_reader.offsets_for_tid(reader, tid).await?;
+
+				Self::read_zlib_bytes_for_region(reader, ranges).await?
+			}
 		};
 
-		let bytes = self.read_bytes_for_region(&ranges).await?;
 		out.clear();
 		let mut cursor = &bytes[..];
 

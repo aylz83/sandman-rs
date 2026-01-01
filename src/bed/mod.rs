@@ -1,19 +1,23 @@
 pub mod autoreader;
-pub mod bed;
-pub mod extra;
+mod autorecord;
+mod bed;
+#[cfg(feature = "bigbed")]
+pub(crate) mod bigbedrecord;
+mod extra;
 mod parser;
-pub mod reader;
-pub mod record;
+mod reader;
+mod record;
 
 pub use reader::*;
 pub use bed::*;
+pub use autorecord::*;
 
 use crate::error;
 
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncSeekExt, BufReader as TokioBufReader};
 use std::path::Path;
-use pufferfish::BGZ;
+use pufferfish::prelude::*;
 
 pub async fn detect_format<P>(path: P) -> error::Result<BedFormat>
 where
@@ -22,14 +26,14 @@ where
 	let file = TokioFile::open(&path).await?;
 	let mut reader = TokioBufReader::new(file);
 
-	let is_bgzf = reader.is_bgz().await?;
+	let is_bgzf = reader.is_bgz().await;
 	reader.seek(std::io::SeekFrom::Start(0)).await?;
 
 	let lines = if is_bgzf
 	{
 		// Read first BGZF block
 		let block = reader
-			.read_bgzf_block(Some(pufferfish::is_bgzf_eof))
+			.read_bgzf_block(Some(is_bgzf_eof))
 			.await
 			.map_err(|_| error::Error::BedFormat(path.as_ref().display().to_string()))?
 			.ok_or_else(|| error::Error::BedFormat(path.as_ref().display().to_string()))?;

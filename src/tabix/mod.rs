@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncSeek, BufReader as TokioBufReader};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use pufferfish::BGZ;
+use pufferfish::prelude::*;
 
 use crate::error;
 
@@ -180,9 +180,7 @@ impl Reader
 		let mut bytes = Vec::new();
 		loop
 		{
-			match reader
-				.read_bgzf_block(Some(pufferfish::is_bgzf_eof))
-				.await?
+			match reader.read_bgzf_block(Some(is_bgzf_eof)).await?
 			{
 				Some(block) =>
 				{

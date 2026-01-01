@@ -1,6 +1,6 @@
 [package]
 name = "sandman"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -14,7 +14,7 @@ repository = "https://github.com/aylz83/sandman-rs"
 byteorder = "1.5.0"
 indexset = "0.12.3"
 tokio = { version = "1.47.1", features = ["full"] }
-pufferfish = { git = "https://github.com/aylz83/pufferfish-rs", version = "0.1.2" }
+pufferfish = { git = "https://github.com/aylz83/pufferfish-rs", version = "0.1.3" }
 thiserror = "2.0.17"
 nom = "8.0.0"
 bincode = { version = "2.0.1", optional = true }
@@ -25,3 +25,4 @@ async-trait = "0.1.89"
 default = []
 interning = ["dep:string-interner"]
 bincode = ["dep:bincode"]
+bigbed = ["pufferfish/zlib"]

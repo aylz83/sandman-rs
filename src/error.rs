@@ -7,6 +7,24 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Error, Debug)]
 pub enum Error
 {
+	#[error("Not currently implemented")]
+	NotImplemented,
+	#[error("FieldValue variant mismatch")]
+	VariantMismatch,
+	#[error("Unable to find tid {0} in index")]
+	TidNotFound(String),
+	#[error("Invalid tid region: start is {0}, end is {1} and the tid size is {2}")]
+	InvalidTidRegion(u64, u64, u64),
+	#[error("Invalid Char length {0} in AutoSQL field")]
+	InvalidCharLength(String),
+	#[error("Missing type in AutoSQL field")]
+	MissingAutoSQLType,
+	#[error("Missing field name in AutoSQL field")]
+	MissingAutoSQLField,
+	#[error("File loaded is not in bigBed format")]
+	NotBigBed,
+	#[error("Reading lines in the {0} format not supported")]
+	ReadLineNotSupported(String),
 	#[error("Memory error")]
 	Memory,
 	#[error(
