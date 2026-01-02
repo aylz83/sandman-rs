@@ -326,7 +326,6 @@ where
 		tbi_reader: Option<R>,
 	) -> error::Result<(BedFormat, FileKind<R>, Option<Index>)>
 	{
-		println!("open_bed_reader");
 		let mut reader = BufReader::new(reader);
 
 		reader.seek(SeekFrom::Start(0)).await?;
@@ -761,7 +760,7 @@ where
 				};
 
 				let ranges = index_reader.offsets_for_tid(reader, tid).await?;
-				println!("ranges = {:?}", ranges);
+				// println!("ranges = {:?}", ranges);
 
 				let bytes = Self::read_zlib_bytes_for_region(reader, ranges).await?;
 				if bytes.is_empty()
