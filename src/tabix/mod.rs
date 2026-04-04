@@ -3,6 +3,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::ops::Range;
+use std::collections::BTreeMap;
 
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncRead, AsyncSeek, BufReader as TokioBufReader};
@@ -37,6 +38,16 @@ pub struct Reference
 }
 
 #[derive(Debug)]
+pub struct Block
+{
+	// BGZF compressed block offset (virtual offset >> 16)
+	pub block_offset: u64,
+
+	// TIDs that have at least one chunk touching this block
+	pub tids: Vec<usize>,
+}
+
+#[derive(Debug)]
 pub struct Reader
 {
 	pub header: Header,
@@ -68,6 +79,36 @@ impl Reader
 			seqnames,
 			ref_indices,
 		})
+	}
+
+	pub fn block_plan(&self) -> Vec<Block>
+	{
+		let mut map: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+
+		for (tid, reference) in self.ref_indices.iter().enumerate()
+		{
+			for region in reference.bins.values()
+			{
+				for chunk in &region.chunks
+				{
+					let start_block = chunk.start >> 16;
+					let end_block = chunk.end >> 16;
+
+					for block in start_block..=end_block
+					{
+						map.entry(block).or_default().push(tid);
+					}
+				}
+			}
+		}
+
+		map.into_iter()
+			.map(|(block_offset, mut tids)| {
+				tids.sort_unstable();
+				tids.dedup();
+				Block { block_offset, tids }
+			})
+			.collect()
 	}
 
 	pub fn offsets_for_tid(&self, tid: &str) -> error::Result<Option<Vec<Range<u64>>>>
@@ -180,7 +221,9 @@ impl Reader
 		let mut bytes = Vec::new();
 		loop
 		{
-			match reader.read_bgzf_block(Some(is_bgzf_eof)).await?
+			match reader
+				.read_and_decompress_bgzf_block(Some(is_bgzf_eof))
+				.await?
 			{
 				Some(block) =>
 				{

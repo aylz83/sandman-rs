@@ -1,782 +1,813 @@
-use nom::character::complete::{space1, line_ending, multispace1};
-use nom::{Parser, IResult};
-use nom::number::complete::float;
-use nom::sequence::delimited;
-use nom::character::char;
-use nom::bytes::complete::{is_not, take_while1, take_till1, tag};
-use nom::combinator::{map_res, opt};
-use nom::multi::many0;
-
-use tokio::io::{SeekFrom, AsyncSeek, AsyncSeekExt, AsyncRead, AsyncBufRead, AsyncBufReadExt};
-
-use tokio::sync::Mutex;
-
-use std::sync::Arc;
 use std::fmt::Debug;
-use std::collections::HashMap;
 
-use crate::bed::BedFormat;
-use crate::bed::BedKind;
-#[cfg(feature = "bigbed")]
-use crate::bed::bigbedrecord::BigBedIndex;
-use crate::bed::BrowserMeta;
-use crate::bed::Track;
-use crate::bed::Strand;
-use crate::bed::BedRecord;
-use crate::bed::Bed3Fields;
-use crate::bed::Bed4Extra;
-use crate::bed::Bed5Extra;
-use crate::bed::Bed6Extra;
-use crate::bed::Bed12Extra;
-use crate::bed::BedMethylExtra;
-use crate::store::TidResolver;
 use crate::error;
+use crate::bed::{Strand, BedKind, BedSinkValue, Bed3Fields};
+use crate::bed::{Bed4Extra, Bed5Extra, Bed6Extra, Bed12Extra, BedMethylExtra};
+use crate::filtering::ReadFilterContext;
 
-pub enum ParseContext<'a>
+mod bed3_fields
 {
-	#[cfg(feature = "bigbed")]
-	BigBed(&'a BigBedIndex),
-	#[cfg(not(feature = "bigbed"))]
-	#[doc(hidden)]
-	_Lifetime(std::marker::PhantomData<&'a ()>),
+	pub const TID: usize = 0;
+	pub const START: usize = 1;
+	pub const END: usize = 2;
+	pub const N_FIELDS: usize = 3;
+}
+mod bed4_fields
+{
+	pub const NAME: usize = 3;
+	pub const N_FIELDS: usize = 4;
+}
+mod bed5_fields
+{
+	pub const SCORE: usize = 4;
+	pub const N_FIELDS: usize = 5;
+}
+mod bed6_fields
+{
+	pub const STRAND: usize = 5;
+	pub const N_FIELDS: usize = 6;
+}
+mod bed12_fields
+{
+	pub const N_FIELDS: usize = 12;
+}
+mod bedmethyl_fields
+{
+	pub const N_VALID_COV: usize = 9;
+	pub const FRAC_MOD: usize = 10;
+	pub const N_MOD: usize = 11;
+	pub const N_CANONICAL: usize = 12;
+	pub const N_OTHER_MOD: usize = 13;
+	pub const N_DELETE: usize = 14;
+	pub const N_FAIL: usize = 15;
+	pub const N_DIFF: usize = 16;
+	pub const N_NOCALL: usize = 17;
+
+	pub const N_FIELDS: usize = 18;
 }
 
-#[async_trait::async_trait]
-pub trait BedFields<Resolver, Tid>: Send + Sync
+// #[async_trait::async_trait]
+pub trait BedFieldsSink<Tid>: Send + Sync
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	fn parse_sink<'a>(
 		input: &'a [u8],
-		ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
-	where
-		Self: Sized;
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> impl std::future::Future<
+		Output = error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>,
+	> + Send
 	where
 		Self: Sized;
 }
 
-#[async_trait::async_trait]
-impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed3Fields
+// #[async_trait::async_trait]
+impl<Tid> BedFieldsSink<Tid> for Bed3Fields
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind = BedKind::Bed3;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	async fn parse_sink<'a>(
 		input: &'a [u8],
-		_ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 	{
-		let (rest, parsed) = parse_bed3_record(resolver.clone(), input)
-			.await
-			.map_err(|_| error::Error::BedMismatch("BED3".into()))?;
+		let (rest, parsed) = parse_bed3_sink_simd(input, filter_ctx).await?;
 
-		*record = parsed;
-		Ok(rest)
-	}
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
-	{
-		let mut r = resolver.lock().await;
-		BedRecord {
-			resolver: resolver.clone(),
-			tid: r.dummy_tid(),
-			start: 0,
-			end: 0,
-			fields: Bed3Fields,
-		}
+		Ok((rest, parsed))
 	}
 }
 
-#[async_trait::async_trait]
-impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed4Extra
+// #[async_trait::async_trait]
+impl<Tid> BedFieldsSink<Tid> for Bed4Extra
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind = BedKind::Bed4;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	async fn parse_sink<'a>(
 		input: &'a [u8],
-		_ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 	{
-		let (rest, parsed) = parse_bed4_record(resolver.clone(), input)
-			.await
-			.map_err(|_| error::Error::BedMismatch("BED4".into()))?;
+		let (rest, parsed) = parse_bed4_sink_simd(input, filter_ctx).await?;
 
-		*record = parsed;
-		Ok(rest)
-	}
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
-	{
-		let mut r = resolver.lock().await;
-		BedRecord {
-			resolver: resolver.clone(),
-			tid: r.dummy_tid(),
-			start: 0,
-			end: 0,
-			fields: Bed4Extra::default(),
-		}
+		Ok((rest, parsed))
 	}
 }
 
-#[async_trait::async_trait]
-impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed5Extra
+// #[async_trait::async_trait]
+impl<Tid> BedFieldsSink<Tid> for Bed5Extra
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind = BedKind::Bed5;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	async fn parse_sink<'a>(
 		input: &'a [u8],
-		_ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 	{
-		let (rest, parsed) = parse_bed5_record(resolver.clone(), input)
-			.await
-			.map_err(|_| error::Error::BedMismatch("BED5".into()))?;
+		let (rest, parsed) = parse_bed5_sink_simd(input, filter_ctx).await?;
 
-		*record = parsed;
-		Ok(rest)
-	}
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
-	{
-		let mut r = resolver.lock().await;
-		BedRecord {
-			resolver: resolver.clone(),
-			tid: r.dummy_tid(),
-			start: 0,
-			end: 0,
-			fields: Bed5Extra::default(),
-		}
+		Ok((rest, parsed))
 	}
 }
 
-#[async_trait::async_trait]
-impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed6Extra
+// #[async_trait::async_trait]
+impl<Tid> BedFieldsSink<Tid> for Bed6Extra
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind = BedKind::Bed6;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	async fn parse_sink<'a>(
 		input: &'a [u8],
-		_ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 	{
-		let (rest, parsed) = parse_bed6_record(resolver.clone(), input)
-			.await
-			.map_err(|_| error::Error::BedMismatch("BED6".into()))?;
+		let (rest, parsed) = parse_bed6_sink_simd(input, filter_ctx).await?;
 
-		*record = parsed;
-		Ok(rest)
-	}
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
-	{
-		let mut r = resolver.lock().await;
-		BedRecord {
-			resolver: resolver.clone(),
-			tid: r.dummy_tid(),
-			start: 0,
-			end: 0,
-			fields: Bed6Extra::default(),
-		}
+		Ok((rest, parsed))
 	}
 }
 
-#[async_trait::async_trait]
-impl<Resolver, Tid> BedFields<Resolver, Tid> for Bed12Extra
+// #[async_trait::async_trait]
+impl<Tid> BedFieldsSink<Tid> for Bed12Extra
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind = BedKind::Bed12;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	async fn parse_sink<'a>(
 		input: &'a [u8],
-		_ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 	{
-		let (rest, parsed) = parse_bed12_record(resolver.clone(), input)
-			.await
-			.map_err(|_| error::Error::BedMismatch("BED12".into()))?;
+		let (rest, parsed) = parse_bed12_sink_simd(input, filter_ctx).await?;
 
-		*record = parsed;
-		Ok(rest)
-	}
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
-	{
-		let mut r = resolver.lock().await;
-		BedRecord {
-			resolver: resolver.clone(),
-			tid: r.dummy_tid(),
-			start: 0,
-			end: 0,
-			fields: Bed12Extra::default(),
-		}
+		Ok((rest, parsed))
 	}
 }
 
-#[async_trait::async_trait]
-impl<Resolver, Tid> BedFields<Resolver, Tid> for BedMethylExtra
+// #[async_trait::async_trait]
+impl<Tid> BedFieldsSink<Tid> for BedMethylExtra
 where
-	Resolver: TidResolver<Tid = Tid> + Debug + Clone + Send + Sync + 'static,
 	Tid: Debug + Clone + Send + Sync + PartialEq,
 {
 	const KIND: BedKind = BedKind::BedMethyl;
 
-	async fn parse_into<'a, 'b>(
-		resolver: Arc<Mutex<Resolver>>,
+	async fn parse_sink<'a>(
 		input: &'a [u8],
-		_ctx: Option<ParseContext<'b>>,
-		record: &mut BedRecord<Resolver, Tid, Self>,
-	) -> error::Result<&'a [u8]>
+		// _ctx: Option<ParseContext<'b>>,
+		filter_ctx: Option<&ReadFilterContext>,
+	) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 	{
-		let (rest, parsed) = parse_bedmethyl_record(resolver.clone(), input)
+		let (rest, parsed) = parse_bedmethyl_sink_simd(input, filter_ctx).await?;
+
+		Ok((rest, parsed))
+	}
+}
+
+pub async fn parse_bed3_sink_simd<'a>(
+	input: &'a [u8],
+	_filter_ctx: Option<&ReadFilterContext>,
+) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
+{
+	if input.is_empty() || input[0] == b'\n'
+	{
+		let rest = memchr::memchr(b'\n', input)
+			.map(|p| p + 1)
+			.unwrap_or(input.len());
+		return Ok((&input[rest..], None));
+	}
+
+	let line_end = memchr::memchr(b'\n', input).unwrap_or(input.len());
+	let line = &input[..line_end];
+
+	let mut fields = [0usize; 32];
+	let mut n = 0;
+	let mut start_idx = 0;
+
+	for (i, &b) in line.iter().enumerate()
+	{
+		if b == b' ' || b == b'\t'
+		{
+			fields[n] = start_idx;
+			n += 1;
+			start_idx = i + 1;
+		}
+	}
+
+	if (n + 1) != bed3_fields::N_FIELDS
+	{
+		return Err(error::Error::BedMismatch("BED3".into()));
+	}
+
+	fields[n] = start_idx;
+
+	let tid = unsafe {
+		std::str::from_utf8_unchecked(
+			&line[fields[bed3_fields::TID]..fields[bed3_fields::START] - 1],
+		)
+	};
+	let start_val = lexical_core::parse::<u64>(
+		&line[fields[bed3_fields::START]..fields[bed3_fields::END] - 1],
+	)?;
+	let end_val = lexical_core::parse::<u64>(&line[fields[bed3_fields::END]..fields[line.len()]])?;
+
+	let rest = if line_end < input.len()
+	{
+		&input[line_end + 1..]
+	}
+	else
+	{
+		&input[line_end..]
+	};
+
+	Ok((
+		&rest,
+		Some((
+			tid,
+			Strand::Both,
+			start_val,
+			end_val,
+			BedSinkValue {
+				name: None,
+				score: None,
+				n_valid_cov: None,
+				frac_mod: None,
+				n_mod: None,
+				n_canonical: None,
+				n_other_mod: None,
+				n_delete: None,
+				n_fail: None,
+				n_diff: None,
+				n_nocall: None,
+			},
+		)),
+	))
+}
+
+pub async fn parse_bed4_sink_simd<'a>(
+	input: &'a [u8],
+	filter_ctx: Option<&ReadFilterContext>,
+) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
+{
+	if input.is_empty() || input[0] == b'\n'
+	{
+		let rest = memchr::memchr(b'\n', input)
+			.map(|p| p + 1)
+			.unwrap_or(input.len());
+		return Ok((&input[rest..], None));
+	}
+
+	let line_end = memchr::memchr(b'\n', input).unwrap_or(input.len());
+	let line = &input[..line_end];
+
+	let mut fields = [0usize; 32];
+	let mut n = 0;
+	let mut start_idx = 0;
+
+	for (i, &b) in line.iter().enumerate()
+	{
+		if b == b' ' || b == b'\t'
+		{
+			fields[n] = start_idx;
+			n += 1;
+			start_idx = i + 1;
+		}
+	}
+
+	if (n + 1) != bed4_fields::N_FIELDS
+	{
+		return Err(error::Error::BedMismatch("BED4".into()));
+	}
+
+	fields[n] = start_idx;
+
+	let tid = unsafe {
+		std::str::from_utf8_unchecked(
+			&line[fields[bed3_fields::TID]..fields[bed3_fields::START] - 1],
+		)
+	};
+	let start_val = lexical_core::parse::<u64>(
+		&line[fields[bed3_fields::START]..fields[bed3_fields::END] - 1],
+	)?;
+	let end_val =
+		lexical_core::parse::<u64>(&line[fields[bed3_fields::END]..fields[bed4_fields::NAME] - 1])?;
+	let name = &line[fields[bed4_fields::NAME]..fields[line.len()]];
+
+	let rest = if line_end < input.len()
+	{
+		&input[line_end + 1..]
+	}
+	else
+	{
+		&input[line_end..]
+	};
+
+	if let Some(ctx) = filter_ctx
+	{
+		if !ctx
+			.passes(tid, start_val, end_val, Strand::Both, Some(&name), None)
 			.await
-			.map_err(|_| error::Error::BedMismatch("BEDMethyl".into()))?;
-
-		*record = parsed;
-		Ok(rest)
-	}
-
-	async fn empty(resolver: Arc<Mutex<Resolver>>) -> BedRecord<Resolver, Tid, Self>
-	{
-		let mut r = resolver.lock().await;
-		BedRecord {
-			resolver: resolver.clone(),
-			tid: r.dummy_tid(),
-			start: 0,
-			end: 0,
-			fields: BedMethylExtra::default(),
+		{
+			return Ok((&rest, None));
 		}
 	}
+
+	let name = unsafe { std::str::from_utf8_unchecked(name) }.to_owned();
+
+	Ok((
+		&rest,
+		Some((
+			tid,
+			Strand::Both,
+			start_val,
+			end_val,
+			BedSinkValue {
+				name: Some(name),
+				score: None,
+				n_valid_cov: None,
+				frac_mod: None,
+				n_mod: None,
+				n_canonical: None,
+				n_other_mod: None,
+				n_delete: None,
+				n_fail: None,
+				n_diff: None,
+				n_nocall: None,
+			},
+		)),
+	))
 }
 
-pub(crate) async fn detect_format_from_reader<
-	B: AsyncRead + AsyncSeek + Send + Unpin + AsyncBufRead,
->(
-	name: String,
-	reader: &mut B,
-	max_lines: usize,
-) -> error::Result<BedFormat>
+pub async fn parse_bed5_sink_simd<'a>(
+	input: &'a [u8],
+	filter_ctx: Option<&ReadFilterContext>,
+) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 {
-	let mut accumulated = Vec::new();
-	let mut line = String::new();
-
-	for _ in 0..max_lines
+	if input.is_empty() || input[0] == b'\n'
 	{
-		line.clear();
-		let bytes_read = reader
-			.read_line(&mut line)
+		let rest = memchr::memchr(b'\n', input)
+			.map(|p| p + 1)
+			.unwrap_or(input.len());
+		return Ok((&input[rest..], None));
+	}
+
+	let line_end = memchr::memchr(b'\n', input).unwrap_or(input.len());
+	let line = &input[..line_end];
+
+	let mut fields = [0usize; 32];
+	let mut n = 0;
+	let mut start_idx = 0;
+
+	for (i, &b) in line.iter().enumerate()
+	{
+		if b == b' ' || b == b'\t'
+		{
+			fields[n] = start_idx;
+			n += 1;
+			start_idx = i + 1;
+		}
+	}
+
+	if (n + 1) != bed5_fields::N_FIELDS
+	{
+		return Err(error::Error::BedMismatch("BED5".into()));
+	}
+
+	fields[n] = start_idx;
+
+	let tid = unsafe {
+		std::str::from_utf8_unchecked(
+			&line[fields[bed3_fields::TID]..fields[bed3_fields::START] - 1],
+		)
+	};
+	let start_val = lexical_core::parse::<u64>(
+		&line[fields[bed3_fields::START]..fields[bed3_fields::END] - 1],
+	)?;
+	let end_val =
+		lexical_core::parse::<u64>(&line[fields[bed3_fields::END]..fields[bed4_fields::NAME] - 1])?;
+	let name = &line[fields[bed4_fields::NAME]..fields[bed5_fields::SCORE] - 1];
+	let score = lexical_core::parse::<u32>(&line[fields[bed5_fields::SCORE]..fields[line.len()]])?;
+
+	let rest = if line_end < input.len()
+	{
+		&input[line_end + 1..]
+	}
+	else
+	{
+		&input[line_end..]
+	};
+
+	if let Some(ctx) = filter_ctx
+	{
+		if !ctx
+			.passes(
+				tid,
+				start_val,
+				end_val,
+				Strand::Both,
+				Some(&name),
+				Some(&[score as f32]),
+			)
 			.await
-			.map_err(|_| error::Error::BedFormat(name.clone()))?;
-		if bytes_read == 0
 		{
-			break; // EOF
-		}
-
-		accumulated.push(line.clone());
-
-		if let Ok(format) = BedFormat::try_from(&accumulated)
-		{
-			reader.seek(SeekFrom::Start(0)).await?;
-			return Ok(format);
+			return Ok((&rest, None));
 		}
 	}
 
-	Err(error::Error::BedFormat(name))
+	let name = unsafe { std::str::from_utf8_unchecked(name) }.to_owned();
+
+	Ok((
+		&rest,
+		Some((
+			tid,
+			Strand::Both,
+			start_val,
+			end_val,
+			BedSinkValue {
+				name: Some(name),
+				score: Some(score),
+				n_valid_cov: None,
+				frac_mod: None,
+				n_mod: None,
+				n_canonical: None,
+				n_other_mod: None,
+				n_delete: None,
+				n_fail: None,
+				n_diff: None,
+				n_nocall: None,
+			},
+		)),
+	))
 }
 
-fn is_key_char(c: char) -> bool
+pub async fn parse_bed6_sink_simd<'a>(
+	input: &'a [u8],
+	filter_ctx: Option<&ReadFilterContext>,
+) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 {
-	c.is_alphanumeric() || c == '_' || c == '-'
-}
-
-fn parse_key(input: &str) -> IResult<&str, &str>
-{
-	take_while1(is_key_char).parse(input)
-}
-
-fn parse_value(input: &str) -> IResult<&str, &str>
-{
-	// value can be quoted or not
-	let quoted = delimited(char('"'), is_not("\""), char('"'));
-	let unquoted = take_till1(|c: char| c.is_whitespace());
-	nom::branch::alt((quoted, unquoted)).parse(input)
-}
-
-fn parse_key_value_pair(input: &str) -> IResult<&str, (&str, &str)>
-{
-	let (input, (k, _, v)) = ((parse_key, tag("="), parse_value)).parse(input)?;
-	Ok((input, (k, v)))
-}
-
-fn parse_browser_pair(input: &str) -> IResult<&str, (String, String)>
-{
-	let (input, key) = parse_key(input)?;
-	let (input, _) = space1(input)?;
-
-	// try key=value first
-	if let Ok((rest, value)) = parse_value(input)
+	if input.is_empty() || input[0] == b'\n'
 	{
-		// check if original input has '=' between key and value
-		if input.starts_with('=')
-		{
-			let value = value.trim_start_matches('=');
-			return Ok((rest, (key.to_string(), value.to_string())));
-		}
-		else
-		{
-			return Ok((rest, (key.to_string(), value.to_string())));
-		}
+		let rest = memchr::memchr(b'\n', input)
+			.map(|p| p + 1)
+			.unwrap_or(input.len());
+		return Ok((&input[rest..], None));
 	}
 
-	// fallback: key with empty value
-	Ok((input, (key.to_string(), "".to_string())))
-}
+	let line_end = memchr::memchr(b'\n', input).unwrap_or(input.len());
+	let line = &input[..line_end];
 
-fn parse_string(input: &[u8]) -> IResult<&[u8], String>
-{
-	map_res(is_not(" \t\r\n"), |s: &[u8]| {
-		std::str::from_utf8(s).map(|s| s.to_string())
-	})
-	.parse(input)
-}
+	let mut fields = [0usize; 32];
+	let mut n = 0;
+	let mut start_idx = 0;
 
-fn parse_u64(input: &[u8]) -> IResult<&[u8], u64>
-{
-	map_res(take_while1(|c: u8| c.is_ascii_digit()), |bytes: &[u8]| {
-		let mut val: u64 = 0;
-		for &b in bytes
-		{
-			val = val
-				.checked_mul(10)
-				.and_then(|v| v.checked_add((b - b'0') as u64))
-				.ok_or("overflow")?;
-		}
-		Ok::<u64, &str>(val)
-	})
-	.parse(input)
-}
-
-fn parse_u32(input: &[u8]) -> IResult<&[u8], u32>
-{
-	map_res(take_while1(|c: u8| c.is_ascii_digit()), |bytes: &[u8]| {
-		let mut val: u32 = 0;
-		for &b in bytes
-		{
-			val = val
-				.checked_mul(10)
-				.and_then(|v| v.checked_add((b - b'0') as u32))
-				.ok_or("overflow")?;
-		}
-		Ok::<u32, &str>(val)
-	})
-	.parse(input)
-}
-
-fn parse_f32(input: &[u8]) -> IResult<&[u8], f32>
-{
-	float(input).map(|(next, val)| (next, val as f32))
-}
-
-fn parse_strand(input: &[u8]) -> IResult<&[u8], Strand>
-{
-	map_res(is_not(" \t\r\n"), |s: &[u8]| {
-		std::str::from_utf8(s).map(Strand::from)
-	})
-	.parse(input)
-}
-
-pub(crate) async fn parse_bed3_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: Arc<Mutex<R>>,
-	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed3Fields>>
-{
-	let (input, (tid, _, start, _, end, _)) = (
-		parse_string,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		line_ending,
-	)
-		.parse(input)?;
-
-	let tid_id = resolver.lock().await.to_symbol_id(&tid);
-
-	Ok((
-		input,
-		BedRecord::new(Arc::clone(&resolver), tid_id, start, end),
-	))
-}
-
-pub(crate) async fn parse_bed4_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: Arc<Mutex<R>>,
-	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed4Extra>>
-{
-	let (input, (tid, _, start, _, end, _, name, _)) = (
-		parse_string,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-		line_ending,
-	)
-		.parse(input)?;
-
-	let tid_id = resolver.lock().await.to_symbol_id(&tid);
-
-	let extra = Bed4Extra { name };
-
-	Ok((
-		input,
-		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
-	))
-}
-
-pub(crate) async fn parse_bed5_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: Arc<Mutex<R>>,
-	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed5Extra>>
-{
-	let (input, (tid, _, start, _, end, _, name, _, score, _)) = (
-		parse_string,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-		multispace1,
-		parse_u32,
-		line_ending,
-	)
-		.parse(input)?;
-
-	let tid_id = resolver.lock().await.to_symbol_id(&tid);
-
-	let extra = Bed5Extra {
-		name,
-		score: Some(score),
-	};
-
-	Ok((
-		input,
-		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
-	))
-}
-
-pub(crate) async fn parse_bed6_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: Arc<Mutex<R>>,
-	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed6Extra>>
-{
-	let (input, (tid, _, start, _, end, _, name, _, score, _, strand, _)) = (
-		parse_string,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_strand,
-		line_ending,
-	)
-		.parse(input)?;
-
-	let tid_id = resolver.lock().await.to_symbol_id(&tid);
-
-	let extra = Bed6Extra {
-		name,
-		score: Some(score),
-		strand,
-	};
-
-	Ok((
-		input,
-		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
-	))
-}
-
-pub(crate) async fn parse_bed12_record<'a, R: TidResolver + std::fmt::Debug + std::clone::Clone>(
-	resolver: Arc<Mutex<R>>,
-	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R, R::Tid, Bed12Extra>>
-{
-	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
-		parse_string,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_strand,
-	)
-		.parse(input)?;
-
-	let (
-		input,
-		(
-			_,
-			thick_start,
-			_,
-			thick_end,
-			_,
-			item_rgb,
-			_,
-			block_count,
-			_,
-			block_sizes_str,
-			_,
-			block_starts_str,
-			_,
-		),
-	) = (
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_string,
-		multispace1,
-		parse_string,
-		line_ending,
-	)
-		.parse(input)?;
-
-	let block_sizes = block_sizes_str
-		.split(',')
-		.filter(|s| !s.is_empty())
-		.map(|s| s.parse::<u32>().unwrap_or(0))
-		.collect::<Vec<_>>();
-	let block_starts = block_starts_str
-		.split(',')
-		.filter(|s| !s.is_empty())
-		.map(|s| s.parse::<u32>().unwrap_or(0))
-		.collect::<Vec<_>>();
-
-	let tid_id = resolver.lock().await.to_symbol_id(&tid);
-
-	let extra = Bed12Extra {
-		name,
-		score: Some(score),
-		strand,
-		thick_start,
-		thick_end,
-		item_rgb: if item_rgb.is_empty()
-		{
-			None
-		}
-		else
-		{
-			Some(item_rgb)
-		},
-		block_count,
-		block_sizes,
-		block_starts,
-	};
-
-	Ok((
-		input,
-		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
-	))
-}
-
-pub(crate) async fn parse_bedmethyl_record<'a, R: TidResolver>(
-	resolver: Arc<Mutex<R>>,
-	input: &'a [u8],
-) -> IResult<&'a [u8], BedRecord<R, R::Tid, BedMethylExtra>>
-{
-	let (input, (tid, _, start, _, end, _, name, _, score, _, strand)) = (
-		parse_string,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_strand,
-	)
-		.parse(input)?;
-
-	let (input, (_, thick_start, _, thick_end, _, item_rgb)) = (
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_u64,
-		multispace1,
-		parse_string,
-	)
-		.parse(input)?;
-
-	let (
-		input,
-		(
-			_,
-			n_valid_cov,
-			_,
-			frac_mod,
-			_,
-			n_mod,
-			_,
-			n_canonical,
-			_,
-			n_other_mod,
-			_,
-			n_delete,
-			_,
-			n_fail,
-			_,
-			n_diff,
-			_,
-			n_nocall,
-			_,
-		),
-	) = (
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_f32,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_u32,
-		multispace1,
-		parse_u32,
-		line_ending,
-	)
-		.parse(input)?;
-
-	let tid_id = resolver.lock().await.to_symbol_id(&tid);
-
-	let extra = BedMethylExtra {
-		name,
-		score: Some(score),
-		strand,
-		thick_start,
-		thick_end,
-		item_rgb: if item_rgb.is_empty()
-		{
-			None
-		}
-		else
-		{
-			Some(item_rgb)
-		},
-		n_valid_cov,
-		frac_mod,
-		n_mod,
-		n_canonical,
-		n_other_mod,
-		n_delete,
-		n_fail,
-		n_diff,
-		n_nocall,
-	};
-
-	Ok((
-		input,
-		BedRecord::new_with_extra(Arc::clone(&resolver), tid_id, start, end, extra),
-	))
-}
-
-pub(crate) fn parse_track_line(input: &str) -> IResult<&str, Track>
-{
-	let mut track = Track::default();
-
-	// must start with "track"
-	let (input, _) = ((tag("track"), space1)).parse(input)?;
-
-	let (input, pairs) = many0((parse_key_value_pair, opt(space1))).parse(input)?;
-
-	for ((key, value), _) in pairs
+	for (i, &b) in line.iter().enumerate()
 	{
-		match key
+		if b == b' ' || b == b'\t'
 		{
-			"name" => track.name = Some(value.to_string()),
-			"description" => track.description = Some(value.to_string()),
-			"visibility" => track.visibility = value.parse::<u8>().ok(),
-			"itemRgb" => track.item_rgb = Some(value.to_string()),
-			"color" => track.color = Some(value.to_string()),
-			"useScore" => track.use_score = value.parse::<u8>().ok(),
-			_ =>
-			{}
+			fields[n] = start_idx;
+			n += 1;
+			start_idx = i + 1;
 		}
 	}
 
-	Ok((input, track))
+	if (n + 1) != bed6_fields::N_FIELDS
+	{
+		return Err(error::Error::BedMismatch("BED6".into()));
+	}
+
+	fields[n] = start_idx;
+
+	let tid = unsafe {
+		std::str::from_utf8_unchecked(
+			&line[fields[bed3_fields::TID]..fields[bed3_fields::START] - 1],
+		)
+	};
+	let start_val = lexical_core::parse::<u64>(
+		&line[fields[bed3_fields::START]..fields[bed3_fields::END] - 1],
+	)?;
+	let end_val =
+		lexical_core::parse::<u64>(&line[fields[bed3_fields::END]..fields[bed4_fields::NAME] - 1])?;
+	let name = &line[fields[bed4_fields::NAME]..fields[bed5_fields::SCORE] - 1];
+	let score = lexical_core::parse::<u32>(
+		&line[fields[bed5_fields::SCORE]..fields[bed6_fields::STRAND] - 1],
+	)?;
+	let strand = Strand::from(line[fields[bed6_fields::STRAND]]);
+
+	let rest = if line_end < input.len()
+	{
+		&input[line_end + 1..]
+	}
+	else
+	{
+		&input[line_end..]
+	};
+
+	if let Some(ctx) = filter_ctx
+	{
+		if !ctx
+			.passes(
+				tid,
+				start_val,
+				end_val,
+				strand,
+				Some(&name),
+				Some(&[score as f32]),
+			)
+			.await
+		{
+			return Ok((&rest, None));
+		}
+	}
+
+	let name = unsafe { std::str::from_utf8_unchecked(name) }.to_owned();
+
+	Ok((
+		&rest,
+		Some((
+			tid,
+			strand,
+			start_val,
+			end_val,
+			BedSinkValue {
+				name: Some(name),
+				score: Some(score),
+				n_valid_cov: None,
+				frac_mod: None,
+				n_mod: None,
+				n_canonical: None,
+				n_other_mod: None,
+				n_delete: None,
+				n_fail: None,
+				n_diff: None,
+				n_nocall: None,
+			},
+		)),
+	))
 }
 
-pub(crate) fn parse_browser_line(input: &str) -> IResult<&str, BrowserMeta>
+pub async fn parse_bed12_sink_simd<'a>(
+	input: &'a [u8],
+	filter_ctx: Option<&ReadFilterContext>,
+) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
 {
-	let (mut input, _) = ((tag("browser"), space1)).parse(input)?;
-	let mut attrs = HashMap::new();
-
-	while !input.trim().is_empty()
+	if input.is_empty() || input[0] == b'\n'
 	{
-		if let Ok((rest, (k, v))) = parse_browser_pair(input)
+		let rest = memchr::memchr(b'\n', input)
+			.map(|p| p + 1)
+			.unwrap_or(input.len());
+		return Ok((&input[rest..], None));
+	}
+
+	let line_end = memchr::memchr(b'\n', input).unwrap_or(input.len());
+	let line = &input[..line_end];
+
+	let mut fields = [0usize; 32];
+	let mut n = 0;
+	let mut start_idx = 0;
+
+	for (i, &b) in line.iter().enumerate()
+	{
+		if b == b' ' || b == b'\t'
 		{
-			attrs.insert(k.to_string(), v.to_string());
-			input = rest.trim_start();
-		}
-		else
-		{
-			break;
+			fields[n] = start_idx;
+			n += 1;
+			start_idx = i + 1;
 		}
 	}
 
-	Ok((input, BrowserMeta { attrs }))
+	if (n + 1) != bed12_fields::N_FIELDS
+	{
+		return Err(error::Error::BedMismatch("BED12".into()));
+	}
+
+	fields[n] = start_idx;
+
+	let tid = unsafe {
+		std::str::from_utf8_unchecked(
+			&line[fields[bed3_fields::TID]..fields[bed3_fields::START] - 1],
+		)
+	};
+	let start_val = lexical_core::parse::<u64>(
+		&line[fields[bed3_fields::START]..fields[bed3_fields::END] - 1],
+	)?;
+	let end_val =
+		lexical_core::parse::<u64>(&line[fields[bed3_fields::END]..fields[bed4_fields::NAME] - 1])?;
+	let name = &line[fields[bed4_fields::NAME]..fields[bed5_fields::SCORE] - 1];
+	let score = lexical_core::parse::<u32>(
+		&line[fields[bed5_fields::SCORE]..fields[bed6_fields::STRAND] - 1],
+	)?;
+	let strand = Strand::from(line[fields[bed6_fields::STRAND]]);
+
+	let rest = if line_end < input.len()
+	{
+		&input[line_end + 1..]
+	}
+	else
+	{
+		&input[line_end..]
+	};
+
+	if let Some(ctx) = filter_ctx
+	{
+		if !ctx
+			.passes(
+				tid,
+				start_val,
+				end_val,
+				strand,
+				Some(&name),
+				Some(&[score as f32]),
+			)
+			.await
+		{
+			return Ok((&rest, None));
+		}
+	}
+
+	let name = unsafe { std::str::from_utf8_unchecked(name) }.to_owned();
+
+	Ok((
+		&rest,
+		Some((
+			tid,
+			strand,
+			start_val,
+			end_val,
+			BedSinkValue {
+				name: Some(name),
+				score: Some(score),
+				n_valid_cov: None,
+				frac_mod: None,
+				n_mod: None,
+				n_canonical: None,
+				n_other_mod: None,
+				n_delete: None,
+				n_fail: None,
+				n_diff: None,
+				n_nocall: None,
+			},
+		)),
+	))
+}
+
+pub async fn parse_bedmethyl_sink_simd<'a>(
+	input: &'a [u8],
+	filter_ctx: Option<&ReadFilterContext>,
+) -> error::Result<(&'a [u8], Option<(&'a str, Strand, u64, u64, BedSinkValue)>)>
+{
+	if input.is_empty() || input[0] == b'\n'
+	{
+		let rest = memchr::memchr(b'\n', input)
+			.map(|p| p + 1)
+			.unwrap_or(input.len());
+		return Ok((&input[rest..], None));
+	}
+
+	let line_end = memchr::memchr(b'\n', input).unwrap_or(input.len());
+	let mut line = &input[..line_end];
+
+	if line.ends_with(b"\r")
+	{
+		line = &line[..line.len() - 1];
+	}
+
+	let mut fields = [0usize; 32];
+	let mut n = 0;
+	let mut start_idx = 0;
+
+	for (i, &b) in line.iter().enumerate()
+	{
+		if b == b' ' || b == b'\t' || b == b'\r'
+		{
+			fields[n] = start_idx;
+			n += 1;
+			start_idx = i + 1;
+		}
+	}
+
+	if (n + 1) != bedmethyl_fields::N_FIELDS
+	{
+		return Err(error::Error::BedMismatch("BEDMethyl".into()));
+	}
+
+	fields[n] = start_idx;
+
+	let tid = unsafe {
+		std::str::from_utf8_unchecked(
+			&line[fields[bed3_fields::TID]..fields[bed3_fields::START] - 1],
+		)
+	};
+	let start_val = lexical_core::parse::<u64>(
+		&line[fields[bed3_fields::START]..fields[bed3_fields::END] - 1],
+	)?;
+	let end_val =
+		lexical_core::parse::<u64>(&line[fields[bed3_fields::END]..fields[bed4_fields::NAME] - 1])?;
+	let name = &line[fields[bed4_fields::NAME]..fields[bed5_fields::SCORE] - 1];
+	let score = lexical_core::parse::<u32>(
+		&line[fields[bed5_fields::SCORE]..fields[bed6_fields::STRAND] - 1],
+	)?;
+	let strand = Strand::from(line[fields[bed6_fields::STRAND]]);
+
+	let n_valid_cov = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_VALID_COV]..fields[bedmethyl_fields::FRAC_MOD] - 1],
+	)?;
+	let frac_mod = lexical_core::parse::<f32>(
+		&line[fields[bedmethyl_fields::FRAC_MOD]..fields[bedmethyl_fields::N_MOD] - 1],
+	)?;
+	let n_mod = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_MOD]..fields[bedmethyl_fields::N_CANONICAL] - 1],
+	)?;
+	let n_canonical = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_CANONICAL]..fields[bedmethyl_fields::N_OTHER_MOD] - 1],
+	)?;
+	let n_other_mod = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_OTHER_MOD]..fields[bedmethyl_fields::N_DELETE] - 1],
+	)?;
+	let n_delete = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_DELETE]..fields[bedmethyl_fields::N_FAIL] - 1],
+	)?;
+	let n_fail = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_FAIL]..fields[bedmethyl_fields::N_DIFF] - 1],
+	)?;
+	let n_diff = lexical_core::parse::<u32>(
+		&line[fields[bedmethyl_fields::N_DIFF]..fields[bedmethyl_fields::N_NOCALL] - 1],
+	)?;
+	let n_nocall =
+		lexical_core::parse::<u32>(&line[fields[bedmethyl_fields::N_NOCALL]..line.len()])?;
+
+	let rest = if line_end < input.len()
+	{
+		&input[line_end + 1..]
+	}
+	else
+	{
+		&input[line_end..]
+	};
+
+	if let Some(ctx) = filter_ctx
+	{
+		if !ctx
+			.passes(
+				tid,
+				start_val,
+				end_val,
+				strand,
+				Some(name),
+				Some(&[
+					score as f32,
+					n_valid_cov as f32,
+					frac_mod,
+					n_mod as f32,
+					n_canonical as f32,
+					n_other_mod as f32,
+					n_delete as f32,
+					n_fail as f32,
+					n_diff as f32,
+					n_nocall as f32,
+				]),
+			)
+			.await
+		{
+			return Ok((&rest, None));
+		}
+	}
+
+	let name = unsafe { std::str::from_utf8_unchecked(name) }.to_owned();
+
+	Ok((
+		&rest,
+		Some((
+			tid,
+			strand,
+			start_val,
+			end_val,
+			BedSinkValue {
+				name: Some(name),
+				score: Some(score),
+				n_valid_cov: Some(n_valid_cov),
+				frac_mod: Some(frac_mod),
+				n_mod: Some(n_mod),
+				n_canonical: Some(n_canonical),
+				n_other_mod: Some(n_other_mod),
+				n_delete: Some(n_delete),
+				n_fail: Some(n_fail),
+				n_diff: Some(n_diff),
+				n_nocall: Some(n_nocall),
+			},
+		)),
+	))
 }
