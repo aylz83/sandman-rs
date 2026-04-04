@@ -1,14 +1,21 @@
 pub mod bed;
 pub mod error;
+pub mod filtering;
 pub mod store;
 pub mod tabix;
 
+pub use pufferfish::prelude as pufferfish;
+
 pub mod prelude
 {
-	pub use crate::bed::AnyBedRecord;
-	pub use crate::bed::AutoBedRecord;
-	pub use crate::bed::{Bed3Fields, Bed4Extra, Bed5Extra, Bed6Extra, Bed12Extra, BedMethylExtra};
+	pub use crate::bed::autooneshotreader::AutoOneShotBlockReaderTrait;
 
-	#[cfg(feature = "bigbed")]
-	pub use crate::bed::bigbedrecord::BigBedExtra;
+	pub use crate::bed::ScoreField;
+
+	pub use crate::store::DefaultTid;
+
+	pub use crate::bed::{BedSinkValue, BedSink};
+	pub use crate::bed::{SourceId, ReaderId};
+	pub use crate::bed::Strand;
+	pub use crate::bed::{Bed3Fields, Bed4Extra, Bed5Extra, Bed6Extra, Bed12Extra, BedMethylExtra};
 }

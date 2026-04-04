@@ -1,16 +1,17 @@
-pub mod autoreader;
-mod autorecord;
+pub mod autooneshotreader;
 mod bed;
-#[cfg(feature = "bigbed")]
-pub(crate) mod bigbedrecord;
+mod blocks;
 mod extra;
+mod fields;
+pub mod oneshotreader;
 mod parser;
-mod reader;
 mod record;
+mod sink;
 
-pub use reader::*;
+pub use parser::*;
+pub use fields::*;
 pub use bed::*;
-pub use autorecord::*;
+pub use sink::*;
 
 use crate::error;
 
@@ -19,7 +20,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncSeekExt, BufReader as TokioB
 use std::path::Path;
 use pufferfish::prelude::*;
 
-pub async fn detect_format<P>(path: P) -> error::Result<BedFormat>
+pub async fn detect_format<P>(path: P) -> error::Result<BedKind>
 where
 	P: AsRef<Path>,
 {
@@ -33,7 +34,7 @@ where
 	{
 		// Read first BGZF block
 		let block = reader
-			.read_bgzf_block(Some(is_bgzf_eof))
+			.read_and_decompress_bgzf_block(Some(is_bgzf_eof))
 			.await
 			.map_err(|_| error::Error::BedFormat(path.as_ref().display().to_string()))?
 			.ok_or_else(|| error::Error::BedFormat(path.as_ref().display().to_string()))?;
@@ -47,7 +48,7 @@ where
 		read_lines(&mut reader, 10).await?
 	};
 
-	BedFormat::try_from(&lines).map_err(|_| {
+	BedKind::try_from(&lines).map_err(|_| {
 		error::Error::BedFormat(
 			path.as_ref()
 				.file_name()
@@ -58,7 +59,6 @@ where
 	})
 }
 
-/// Helper to read up to `max_lines` lines from a buffered reader.
 async fn read_lines<B>(reader: &mut B, max_lines: usize) -> error::Result<Vec<String>>
 where
 	B: AsyncBufRead + Unpin,

@@ -1,15 +1,118 @@
 use std::fmt::{Debug, Display};
-use std::collections::HashMap;
+// use std::collections::HashMap;
 use std::fmt;
 
+use std::sync::atomic::AtomicUsize;
+
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncSeek, AsyncSeekExt, AsyncRead, SeekFrom};
+
 pub use crate::bed::record::*;
-#[cfg(feature = "bigbed")]
-pub use crate::bed::bigbedrecord::*;
+// #[cfg(feature = "bigbed")]
+// pub use crate::bed::bigbedrecord::*;
 pub use crate::bed::extra::*;
-pub use crate::bed::parser::*;
-use crate::store::TidResolver;
+// pub use crate::bed::parser::*;
+// use crate::store::TidResolver;
 
 use crate::error;
+
+pub(crate) async fn detect_format_from_reader<
+	B: AsyncRead + AsyncSeek + Send + Unpin + AsyncBufRead,
+>(
+	name: String,
+	reader: &mut B,
+	max_lines: usize,
+) -> error::Result<BedKind>
+{
+	let mut accumulated = Vec::new();
+	let mut line = String::new();
+
+	for _ in 0..max_lines
+	{
+		line.clear();
+		let bytes_read = reader
+			.read_line(&mut line)
+			.await
+			.map_err(|_| error::Error::BedFormat(name.clone()))?;
+		if bytes_read == 0
+		{
+			break; // EOF
+		}
+
+		accumulated.push(line.clone());
+
+		if let Ok(format) = BedKind::try_from(&accumulated)
+		{
+			reader.seek(SeekFrom::Start(0)).await?;
+			return Ok(format);
+		}
+	}
+
+	Err(error::Error::BedFormat(name))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct SourceId(pub usize);
+
+impl From<usize> for SourceId
+{
+	fn from(id: usize) -> Self
+	{
+		SourceId(id)
+	}
+}
+
+impl From<SourceId> for usize
+{
+	fn from(source_id: SourceId) -> Self
+	{
+		source_id.0
+	}
+}
+
+impl std::fmt::Display for SourceId
+{
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+	{
+		write!(f, "{}", self.0)
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct ReaderId(pub usize);
+
+impl From<usize> for ReaderId
+{
+	fn from(id: usize) -> Self
+	{
+		ReaderId(id)
+	}
+}
+
+impl From<ReaderId> for usize
+{
+	fn from(reader_id: ReaderId) -> Self
+	{
+		reader_id.0
+	}
+}
+
+impl From<&ReaderId> for usize
+{
+	fn from(reader_id: &ReaderId) -> Self
+	{
+		reader_id.0
+	}
+}
+
+impl std::fmt::Display for ReaderId
+{
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+	{
+		write!(f, "{}", self.0)
+	}
+}
+
+pub(crate) static NEXT_READER_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BedKind
@@ -20,8 +123,6 @@ pub enum BedKind
 	Bed6,
 	Bed12,
 	BedMethyl,
-	#[cfg(feature = "bigbed")]
-	BigBed,
 }
 
 impl fmt::Display for BedKind
@@ -36,46 +137,23 @@ impl fmt::Display for BedKind
 			BedKind::Bed6 => "BED6",
 			BedKind::Bed12 => "BED12",
 			BedKind::BedMethyl => "BEDMethyl",
-			#[cfg(feature = "bigbed")]
-			BedKind::BigBed => "BigBed",
 		};
 		f.write_str(s)
 	}
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct BedFormat
-{
-	pub kind: BedKind,
-	pub has_tracks: Option<bool>,
-	pub has_browsers: Option<bool>,
-}
-
-impl TryFrom<&Vec<String>> for BedFormat
+impl TryFrom<&Vec<String>> for BedKind
 {
 	type Error = error::Error;
 
 	fn try_from(bed_lines: &Vec<String>) -> error::Result<Self>
 	{
-		let mut has_tracks = false;
-		let mut has_browsers = false;
-
 		for line in bed_lines
 		{
 			let trimmed = line.trim();
 
 			if trimmed.is_empty()
 			{
-				continue;
-			}
-			else if trimmed.starts_with("track")
-			{
-				has_tracks = true;
-				continue;
-			}
-			else if trimmed.starts_with("browser")
-			{
-				has_browsers = true;
 				continue;
 			}
 
@@ -91,11 +169,7 @@ impl TryFrom<&Vec<String>> for BedFormat
 				_ => return Err(error::Error::Parse(trimmed.to_string())),
 			};
 
-			return Ok(BedFormat {
-				kind,
-				has_tracks: Some(has_tracks),
-				has_browsers: Some(has_browsers),
-			});
+			return Ok(kind);
 		}
 
 		Err(error::Error::AutoDetect)
@@ -125,6 +199,19 @@ impl From<&str> for Strand
 	}
 }
 
+impl From<u8> for Strand
+{
+	fn from(strand_byte: u8) -> Self
+	{
+		match strand_byte
+		{
+			b'+' => Strand::Plus,
+			b'-' => Strand::Minus,
+			_ => Strand::Both,
+		}
+	}
+}
+
 impl Display for Strand
 {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error>
@@ -136,69 +223,4 @@ impl Display for Strand
 			Strand::Both => write!(f, "."),
 		}
 	}
-}
-
-#[cfg(feature = "bincode")]
-mod bincode_utils
-{
-	use super::Strand;
-
-	pub fn serialize(data: &Strand) -> Vec<u8>
-	{
-		bincode::encode_to_vec(data, bincode::config::standard()).unwrap()
-	}
-
-	pub fn deserialize(bytes: &[u8]) -> Strand
-	{
-		bincode::decode_from_slice(bytes, bincode::config::standard())
-			.unwrap()
-			.0
-	}
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Track
-{
-	pub name: Option<String>,
-	pub description: Option<String>,
-	pub visibility: Option<u8>,
-	pub item_rgb: Option<String>,
-	pub color: Option<String>,
-	pub use_score: Option<u8>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct BrowserMeta
-{
-	pub attrs: HashMap<String, String>,
-}
-
-impl BrowserMeta
-{
-	pub fn get(&self, key: &str) -> Option<&str>
-	{
-		self.attrs.get(key).map(|s| s.as_str())
-	}
-}
-
-#[derive(Clone, Debug)]
-pub enum AnyBedRecord<T>
-where
-	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
-{
-	Bed3(BedRecord<T, T::Tid, Bed3Fields>),
-	Bed4(BedRecord<T, T::Tid, Bed4Extra>),
-	Bed5(BedRecord<T, T::Tid, Bed5Extra>),
-	Bed6(BedRecord<T, T::Tid, Bed6Extra>),
-	Bed12(BedRecord<T, T::Tid, Bed12Extra>),
-	BedMethyl(BedRecord<T, T::Tid, BedMethylExtra>),
-	#[cfg(feature = "bigbed")]
-	BigBed(BedRecord<T, T::Tid, BigBedExtra>),
-}
-
-pub trait IntoAnyBedRecord<T>
-where
-	T: TidResolver + std::clone::Clone + std::fmt::Debug + Send + Sync + 'static,
-{
-	fn into_any(self) -> AnyBedRecord<T>;
 }
