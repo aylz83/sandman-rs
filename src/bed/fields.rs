@@ -1,12 +1,16 @@
 use crate::error;
 
+use std::path::Path;
 use std::str::FromStr;
 
 use serde::{Serialize, Deserialize};
 
+use crate::bed::detect_format;
+use crate::bed::BedKind;
+
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(try_from = "String")]
+#[serde(rename_all = "kebab-case")]
 pub enum ScoreField
 {
 	Score = 0,
@@ -27,6 +31,16 @@ impl ScoreField
 	pub fn as_usize(self) -> usize
 	{
 		self as usize
+	}
+
+	pub async fn best_from_file(file: &Path) -> Self
+	{
+		let bed_format = detect_format(file).await;
+		match bed_format
+		{
+			Ok(BedKind::BedMethyl) => ScoreField::NMod,
+			_ => ScoreField::Score,
+		}
 	}
 }
 
@@ -58,26 +72,6 @@ impl TryFrom<u8> for ScoreField
 			9 => Ok(ScoreField::NNoCall),
 			_ => Err(error::Error::InvalidScoreField((value as char).to_string())),
 		}
-	}
-}
-
-impl TryFrom<&String> for ScoreField
-{
-	type Error = error::Error;
-
-	fn try_from(value: &String) -> error::Result<Self>
-	{
-		Self::try_from(value.as_str())
-	}
-}
-
-impl TryFrom<String> for ScoreField
-{
-	type Error = error::Error;
-
-	fn try_from(value: String) -> error::Result<Self>
-	{
-		Self::try_from(value.as_str())
 	}
 }
 
@@ -145,13 +139,5 @@ impl FromStr for ScoreField
 			"n_no_call" | "NNoCall" => Ok(ScoreField::NNoCall),
 			_ => Err(error::Error::InvalidScoreField(s.to_string())),
 		}
-	}
-}
-
-impl From<ScoreField> for String
-{
-	fn from(field: ScoreField) -> Self
-	{
-		field.to_string()
 	}
 }
