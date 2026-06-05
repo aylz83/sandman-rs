@@ -141,3 +141,11 @@ impl FromStr for ScoreField
 		}
 	}
 }
+
+impl From<ScoreField> for String
+{
+	fn from(field: ScoreField) -> Self
+	{
+		field.to_string()
+	}
+}
