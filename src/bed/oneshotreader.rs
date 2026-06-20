@@ -39,6 +39,7 @@ pub struct ReaderOptions<Interner>
 	pub buffer_size: Option<usize>,
 	pub interner: Option<Arc<Mutex<Interner>>>,
 	pub read_filter: Option<Arc<Mutex<ReadFilterContext>>>,
+	pub one_indexed: Option<bool>,
 	pub n_threads: Option<usize>,
 }
 
@@ -50,6 +51,7 @@ impl<Interner> Default for ReaderOptions<Interner>
 			buffer_size: Some(DEFAULT_BUFFER_SIZE),
 			interner: None,
 			read_filter: None,
+			one_indexed: None,
 			n_threads: None,
 		}
 	}
@@ -80,6 +82,12 @@ impl<Interner> ReaderOptions<Interner>
 		self.n_threads = Some(n);
 		self
 	}
+
+	pub fn with_one_indexed(mut self, one_based: bool) -> Self
+	{
+		self.one_indexed = Some(one_based);
+		self
+	}
 }
 
 pub struct OneShotBlockReader<R, T, F>
@@ -93,6 +101,7 @@ where
 	pub(crate) resolver: Arc<Mutex<T>>,
 	pub(crate) filter_ctx: Option<Arc<Mutex<ReadFilterContext>>>,
 	pub(crate) reader_id: ReaderId,
+	pub(crate) one_indexed: bool,
 	pub(crate) source_id: Option<SourceId>,
 	pub(crate) pending_tail: Option<Vec<u8>>,
 	pub(crate) thread_pool: ThreadPool,
@@ -228,6 +237,7 @@ where
 			reader_id: ReaderId(reader_id),
 			source_id: source_id.into(),
 			pending_tail: None,
+			one_indexed: false,
 			_phantom: PhantomData,
 		}
 	}
@@ -266,6 +276,7 @@ where
 			filter_ctx: options.read_filter.into(),
 			reader_id: ReaderId(reader_id),
 			source_id: source_id.into(),
+			one_indexed: options.one_indexed.unwrap_or(false),
 			pending_tail: None,
 			_phantom: PhantomData,
 		}
@@ -303,6 +314,7 @@ where
 			filter_ctx: None,
 			reader_id: ReaderId(reader_id),
 			source_id: source_id.into(),
+			one_indexed: false,
 			pending_tail: None,
 			_phantom: PhantomData,
 		})
@@ -345,6 +357,7 @@ where
 			filter_ctx: options.read_filter.into(),
 			reader_id: ReaderId(reader_id),
 			source_id: source_id.into(),
+			one_indexed: options.one_indexed.unwrap_or(false),
 			pending_tail: None,
 			_phantom: PhantomData,
 		})
@@ -510,6 +523,15 @@ where
 
 			if let Some((tid, strand, start, end, value)) = parsed
 			{
+				let (start, end) = if self.one_indexed
+				{
+					(start, end)
+				}
+				else
+				{
+					(start + 1, end)
+				};
+
 				last_strand = strand;
 
 				let tid = self.resolver.lock().await.to_symbol_id(tid);
