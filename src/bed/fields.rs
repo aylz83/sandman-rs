@@ -10,7 +10,7 @@ use crate::bed::BedKind;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum ScoreField
 {
 	Score = 0,
